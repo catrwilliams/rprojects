@@ -1,0 +1,243 @@
+---
+title: "Migraine Status"
+author: "Catherine Williams"
+date: "April 4, 2019"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    df_print: paged
+editor_options:
+  chunk_output_type: console
+---
+
+---
+Data from May 15, 2018 to March 30, 2019
+
+Recorded in Migraine Buddy
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#load libraries
+library(tidyverse)
+library(readxl) #used to import excel file
+library(lubridate) #used for date manipulation
+library(stringr) #used for string manipulation
+library(calendar) #used to import ical file
+library(dplyr)
+library(forcats)
+theme_set(theme_classic())
+```
+```{r dataframes, include=FALSE}
+#base migraine dataframe
+df <- read_excel(path="C:/Users/Cat/Documents/Migraine Stats/Report Files/April 2019/Migraine Buddy 3-31-19.xlsx")
+
+df <- df %>% mutate(PK = as.integer(`#`))
+df <- df %>% drop_na(PK)
+
+df <- df %>% mutate(started = mdy_hm(Started),
+                    lasted = hm(Lasted),
+                    lasted = as.numeric(lasted, "minutes"),
+                    lasted = lasted/60,
+                    pain_level = as.factor(`Pain Level`),
+                    triggers = `Potential Triggers `,
+                    symptoms = Symptoms,
+                    date = date(started),
+                    sumatriptan = str_detect(Medication, ".*Sumatriptan.*")) %>%
+  select(PK, date, lasted, pain_level, triggers, symptoms, sumatriptan)
+
+df$lasted <- df$lasted %>% round(1)
+
+#symptoms dataframe
+df_symptoms <- df %>% mutate(Dizzness = str_detect(symptoms, ".*Dizziness.*"),
+                            Fatigue = str_detect(symptoms, '.*Fatigue.*'),
+                            Tinnitus = str_detect(symptoms, '.*Tinnitus.*'),
+                            Blurred_vision = str_detect(symptoms, '.*Blurred.*'),
+                            Nausea = str_detect(symptoms, '.*Nausea.*'),
+                            Light_sensitivity = str_detect(symptoms, '.*Sensitivity.*')) %>%
+  select(-symptoms)
+
+df_symptoms <- df_symptoms %>% gather(symptoms, sym_status, Dizzness:Light_sensitivity) %>% select(1:4, symptoms:sym_status)
+
+df_symptoms <- df_symptoms %>% filter(sym_status == TRUE) %>% mutate(symptoms = as.factor(symptoms))
+
+df_symptoms <- df_symptoms %>% filter(!symptoms %in% c("Light_sensitivity")) %>% mutate(symptoms = fct_drop(symptoms))
+
+fct_count(df_symptoms$symptoms, sort=TRUE)
+
+df_symptoms %>% glimpse()
+
+#triggers dataframe
+df_triggers <- df %>% mutate(Stress = str_detect(triggers, ".*Stress.*|.*Anxiety.*"),
+                            Posture = str_detect(triggers, '.*Posture.*'),
+                            Light = str_detect(triggers, '.*Bright.*'),
+                            Focus = str_detect(triggers, '.*Focus.*'),
+                            Visual = str_detect(triggers, '.*Visual.*'),
+                            Motion = str_detect(triggers, '.*meal.*'),
+                            Noise = str_detect(triggers, ".*noise.*"),
+                            Smell = str_detect(triggers, ".*smell.*"),
+                            Caffeine = str_detect(triggers, ".*Caffeine.*"),
+                            Lack_of_sleep = str_detect(triggers, ".*sleep.*"),
+                            Dehydration = str_detect(triggers, ".*Dehydration.*"),
+                            Neck_pain = str_detect(triggers, ".*Neck.*"),
+                            Climbing = str_detect(triggers, ".*Climbing.*"),
+                            Chocolate = str_detect(triggers, ".*Chocolate.*")) %>%
+  select(-triggers)
+
+df_triggers <- df_triggers %>% gather(triggers, trig_status, Stress:Chocolate) %>% select(1:4, triggers, trig_status)
+
+df_triggers <- df_triggers %>% filter(trig_status == TRUE) %>% mutate(triggers = as.factor(triggers))
+
+df_triggers <- df_triggers %>% filter(!triggers %in% c("Chocolate","Neck_pain", "Climbing", "Caffeine", "Dehydration")) %>% 
+  mutate(triggers = fct_drop(triggers))
+
+fct_count(df_triggers$triggers, sort=TRUE)
+
+df_triggers %>% glimpse()
+
+#calendar dataframe
+df_cal <- ic_read("C:/Users/Cat/Documents/Migraine Stats/Report Files/April 2019/Calendar.ics")
+
+df_cal <- df_cal %>% mutate(a_start = `DTSTART;VALUE=DATE`,
+                            b_start = as_date(DTSTART),
+                            medication = SUMMARY) %>% 
+  select(a_start, b_start, medication)
+
+df_cal <- df_cal %>% mutate(botox = str_detect(medication, ".*Botox.*"),
+                            aimovig = str_detect(medication, "^Aimovig"),
+                            medication = str_replace(medication, ".*Botox.*", "Botox")) %>%
+  filter(botox == TRUE | aimovig == TRUE)
+
+df_cal <- df_cal %>% gather(type, date, a_start:b_start)
+df_cal <- df_cal %>% drop_na() %>% select(-type)
+
+df_cal[nrow(df_cal) +1,]=list("Aimovig", FALSE, TRUE, "2018-12-31")
+
+df_cal <- df_cal %>% filter(date != "2019-04-09")
+
+df_cal %>% glimpse()
+
+#botox dataframe
+df_botox <- df_cal %>% filter(botox==TRUE) %>% select(-aimovig)
+df_botox %>% glimpse()
+
+#aimovig dataframe
+df_aimovig <- df_cal %>% filter(aimovig==TRUE) %>% select(-botox)
+df_aimovig %>% glimpse()
+
+#pain level dataframe
+df_pain <- df %>% mutate(pain_level = as.integer(pain_level),
+                         month = month(date),
+                         month = as.factor(month),
+                         month = fct_relevel(month, "5", "6", "7", "8", "9", "10", "11", "12", "1", "2" ,"3")) %>%
+  select(date, month, pain_level) %>% drop_na()
+
+df_pain <- df_pain %>% group_by(month) %>% summarize(avg_pain = pain_level %>% mean())
+
+fct_count(df_pain$month, sort=TRUE)
+
+#migraine free days dataframe
+df_free <- seq.POSIXt(as.POSIXlt("2018-05-15"), as.POSIXlt("2019-03-30"), by="day")
+
+df_free <- data.frame(date=as_date(df_free))
+
+df_free <- df_free %>% anti_join(df)
+
+df_free <- df_free %>% mutate(month = month(date),
+                              month = as.factor(month),
+                              month = fct_relevel(month, "5", "6", "7", "8", "9", "10", "11", "12", "1", "2" ,"3"))
+
+#sumatriptan dataframe
+df_sumatriptan <- df %>% filter(sumatriptan==TRUE) %>% mutate(month = month(date),
+                                                              month = as.factor(month)) %>% 
+  select(date, month, sumatriptan) %>% distinct()
+
+fct_count(df_sumatriptan$month, sort=TRUE)
+
+#duration dataframe
+df_duration <- df %>% filter(lasted<25) %>% mutate(month = month(date),
+                             month = as.factor(month)) %>%
+  select(-sumatriptan)
+
+```
+
+## Migraine Plots
+
+```{r plots, echo=FALSE, warning=FALSE}
+#plot migraines vs. medications over time
+lim1 <- c("2018-04-13", "2019-03-30") %>% as_date()
+lim2 <- c("2018-05-15", "2019-03-30") %>% as_date()
+
+ggplot()+ 
+  geom_histogram(data=df, aes(date), alpha = 0.1, color="white", binwidth=30)+
+  geom_freqpoly(data=df, aes(date), size=1.5, binwidth=30)+
+  geom_vline(data=df_aimovig, aes(xintercept=as.numeric(as.Date(df_aimovig$date)), linetype = "Aimovig"), color="blue", alpha=0.5)+
+  geom_vline(data=df_botox, aes(xintercept=as.numeric(as.Date(df_botox$date)), linetype = "Botox"), color="red")+
+  scale_linetype_manual(name="Medication", values = c(1,2), guide = guide_legend(override.aes = list(color = c("blue", "red"))))+
+  scale_x_date(limits = lim1, date_breaks="3 months", date_labels="%b %Y")+
+  labs(title="Chart 1: Number of Migraines Per Month", subtitle="Medication dates shown", x="Date", y="# of Migraines")
+
+#plot migraine free days
+df_free %>% ggplot(aes(month))+
+  geom_bar(fill="dark green", alpha=0.3, color="black")+
+  geom_text(stat = 'count',aes(label =..count.., vjust = -0.5))+
+  scale_x_discrete(breaks = c("6", "9", "12", "3"), labels=c("Jun 2018", "Sep 2018", "Dec 2018", "Mar 2019"))+
+  labs(title="Chart 2: Migraine Free Days Per Month", x="Date", y="# of Migraine Free Days")
+
+#plot average pain level per month
+df_pain %>% ggplot(aes(month, avg_pain))+
+  geom_bar(stat="identity", fill="yellow", alpha=0.4, color="black")+
+  geom_line(group=1, size=1.2)+
+  scale_x_discrete(breaks = c("6", "9", "12", "3"), labels=c("Jun 2018", "Sep 2018", "Dec 2018", "Mar 2019"))+
+  labs(title="Chart 3: Average Pain Level Per Month", subtitle="Pain levels are 0-10, with 10 being the worst", x="Date", y="Average Pain Level")
+
+#plot sumatriptan use
+df_sumatriptan %>% ggplot(aes(date))+
+  geom_histogram(binwidth=30, fill="blue", color="gray", alpha=0.4)+
+  geom_freqpoly(binwidth=30, size=1.2)+
+  scale_x_date(limits = lim2, date_breaks="3 months", date_labels="%b %Y")+
+  labs(title="Chart 4: Sumatriptan Use Per Month", subtitle='"Rescue Medication"', x="Date", y="# of Sumatriptan")
+
+#plot migraine duration
+df_duration %>% ggplot(aes(date, lasted, color = lasted))+
+  geom_point()+
+  geom_smooth(se=FALSE, color="orange", size=1.2, method="loess")+
+  scale_x_date(limits = lim2, date_breaks="3 months", date_labels="%b %Y")+
+  labs(title="Chart 5: Migraine Duration Over Time", x="Date", y="Migraine Duration (in hours)", color="Hours")
+
+#plot triggers
+df_triggers %>% ggplot(aes(triggers, date, fill=triggers))+
+  geom_violin(show.legend = FALSE)+
+  geom_hline(aes(yintercept=as.numeric(as.Date("2018-11-08")), linetype = "Started VT"), size=1.5)+
+  scale_linetype_manual(name="Event", values = 1)+
+  scale_x_discrete(labels= c("Focus", "Lack of sleep", "Bright light", "Motion", "Loud noise", "Poor posture", "Strong smell", "Stress", "Visual"))+
+  scale_y_date(limits = lim2, date_breaks="3 months", date_labels="%b %Y")+
+  coord_flip()+
+  labs(title="Chart 6: Migraine Triggers Over Time", subtitle="Infrequent triggers removed from data set", x="Triggers", y="Date")
+
+#plot symptoms
+df_symptoms %>% ggplot(aes(symptoms, date, fill=symptoms))+
+  geom_violin(show.legend = FALSE)+
+  geom_hline(aes(yintercept=as.numeric(as.Date("2018-11-08")), linetype = "Started VT"), size=1.5)+
+  #adds legend for geom_hline
+  scale_linetype_manual(name="Event", values = 1)+
+  scale_x_discrete(labels= c("Blurred vision", "Dizziness", "Fatigue", "Nausea", "Ringing in ears"))+
+  scale_y_date(limits = lim2, date_breaks="3 months", date_labels="%b %Y")+
+  coord_flip()+
+  labs(title="Chart 7: Migraine Symptoms Over Time", x="Symptoms", y="Date")
+
+```
+
+## Analysis and Conclusions
+
+Chart 1 shows a steady decline of migraines starting around mid-September 2018. This is also the time period where the third Botox injection was given (this is supposed to be when it really starts working) and Aimovig was started.
+
+Chart 2 shows an increase in migraine free days starting in November 2018, with a very drastic improvement in March 2019.
+
+The 3rd chart shows that average pain level is increasing over time. This could just mean fewer lower-pain migraines are occuring or could correlate to lower Sumatriptan use in the next chart (Chart 4). Sumatriptan use has had a steady decline and this could be because it is not needed as much or just that it isn't being taken, thus increasing the average pain level. It could also be a combination of both factors.
+
+Chart 5 shows that migraine duration has been on a steady decline since around December 2018, however, the duration has been relatively constant over time.
+
+Chart 6 shows that many migraine triggers have decreased since vision therapy (VT) was started, particularly visual triggers. It also shows that some triggers have increased, but this is likely due to new activities being introduced as a result of feeling better. Posture is a good example of this since it is largely poor posture at the computer or watching TV- both things that were not being done very often before VT.
+
+The final chart shows a very clear decline in migraine symptoms since VT started, with nausea being basically non-existent. Blurred vision also a significant drop, which is logical after VT has started.
