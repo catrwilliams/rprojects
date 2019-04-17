@@ -1,0 +1,371 @@
+---
+title: "Titanic"
+author: "Catherine Williams"
+date: "April 17, 2019"
+output: html_document
+---
+
+## Competition Description
+
+The sinking of the RMS Titanic is one of the most infamous shipwrecks in history.  On April 15, 1912, during her maiden voyage, the Titanic sank after colliding with an iceberg, killing 1502 out of 2224 passengers and crew. This sensational tragedy shocked the international community and led to better safety regulations for ships.
+
+One of the reasons that the shipwreck led to such loss of life was that there were not enough lifeboats for the passengers and crew. Although there was some element of luck involved in surviving the sinking, some groups of people were more likely to survive than others, such as women, children, and the upper-class.
+
+In this challenge, we ask you to complete the analysis of what sorts of people were likely to survive. In particular, we ask you to apply the tools of machine learning to predict which passengers survived the tragedy.
+
+```{r libraries, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(tidyverse)
+library(stringr)
+library(broom) #for glance function
+library(zoo)
+library(modeest)
+library(pscl) # McFadden R^2 index - used to assess model fit for glm models
+library(ROCR) # ROC curve
+```
+
+First, import the data frames that Kaggle provided.
+
+```{r import}
+#import data frames
+path <- "C:/Users/Cat/Google Drive/Data Analysis/Kaggle Competitions/Titanic - Machine Learning/"
+  
+df_train <- read_csv(file=str_c(path, "train.csv"))
+df_test <- read_csv(file=str_c(path, "test.csv"))
+```
+
+Review training data to understand it. 
+Find missing values.
+
+```{r review, warning=FALSE}
+#review data frame
+df_train %>% glimpse() %>% summary()
+
+df_train$Survived %>% table()
+
+sapply(df_train, function(x) sum(is.na(x)))
+
+sapply(df_train, function(x) length(unique(x)))
+
+Amelia::missmap(df_train, main = "Missing values vs observed")
+```
+
+Perform data cleaning- change variable types and break up strings to become more meaningful.
+Add missing values in for age since only a few are missing.
+Drop Cabin since too many values are missing.
+
+```{r df_train}
+#clean training data
+df_train <- df_train %>% mutate(Survived = as.logical(Survived),
+                                PassengerId = as.integer(PassengerId),
+                                Pclass = as.factor(Pclass),
+                                Sex = if_else(Sex == 'female', 1, 2) %>% as.factor(),
+                                SibSp = as.ordered(SibSp),
+                                Parch = as.ordered(Parch),
+                                TicketNbr = str_extract(Ticket, "[:digit:]*$") %>% as.integer(),
+                                Ticket = as.factor(Ticket),
+                                Embarked = as.factor(Embarked),
+                                Lname = str_extract(Name, "^.*(?=,)") %>% as.factor(),
+                                Title = str_extract(Name, "(?<=,\\s)[:alpha:]+\\s?[:alpha:]*(?=.)") %>% as.factor()) %>%
+  select(-Name, -Cabin, -PassengerId)
+
+df_train$Age <- na.aggregate(df_train$Age)
+df_train$Embarked[is.na(df_train$Embarked)] <- mfv(df_train$Embarked, na.rm=T)
+df_train$TicketNbr <- replace(df_train$TicketNbr, is.na(df_train$TicketNbr), 0) %>% as.factor()
+
+df_train %>% glimpse()
+```
+
+Repeat same data cleaning for test so that model can be applied for later use.
+```{r df_test}
+#repeat for df_test
+df_test <- df_test %>% mutate(PassengerId = as.integer(PassengerId),
+                              Pclass = as.factor(Pclass),
+                              Sex = if_else(Sex == 'female', 1, 2) %>% as.factor(),
+                              SibSp = as.ordered(SibSp),
+                              Parch = as.ordered(Parch),
+                              TicketNbr = str_extract(Ticket, "[:digit:]*$") %>% as.integer(),
+                              Ticket = as.factor(Ticket),
+                              Embarked = as.factor(Embarked),
+                              Lname = str_extract(Name, "^.*(?=,)") %>% as.factor(),
+                              Title = str_extract(Name, "(?<=,\\s)[:alpha:]+\\s?[:alpha:]*(?=.)") %>% as.factor()) %>%
+  select(-Name, -Cabin)
+
+df_test$Age <- na.aggregate(df_test$Age)
+df_test$Embarked[is.na(df_test$Embarked)] <- mfv(df_test$Embarked, na.rm=T)
+df_test$TicketNbr <- replace(df_test$TicketNbr, is.na(df_test$TicketNbr), 0) %>% as.factor()
+
+df_test %>% glimpse()
+```
+
+Get a general sense for which features may affect the label.
+```{r basic violin plots}
+#look for basic trends (violin plot)
+y_col <- "Survived"
+x_cols <- df_train %>% names()
+x_cols <- x_cols[!str_detect(x_cols, y_col)]
+
+gg_violin <- function(x_col, data){
+  if(is.numeric(data[[x_col]])){
+  plt <- data %>%
+    ggplot(aes_string(x='Survived', y=x_col)) +
+    geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), fill = 'blue', alpha = 0.3, size = 1.0)+
+    labs(title=str_c("Survived vs. ", x_col))
+
+  plt %>% print()
+  }
+}
+
+x_cols %>% walk(gg_violin, df_train)
+```
+
+```{r basic dotplots}
+#look for basic trends (dotplot)
+gg_dotplot <- function(x_col, data, bins = 60){
+  if(is.numeric(data[[x_col]])){
+  binwidth <- (max(data[,x_col]) - min(data[,x_col])) / bins
+  plt <- ggplot(data, aes_string(x_col)) +
+    geom_dotplot(dotsize = 0.5, method = "histodot", binwidth=binwidth) +
+    facet_wrap(~Survived)+
+    labs(title=str_c("Survived vs. ", x_col))
+
+  plt %>% print()
+  }
+}
+
+x_cols %>% walk(gg_dotplot, df_train)
+```
+
+```{r basic scatterplots}
+#look for basic trends (scatter plot)
+gg_scatter <- function(data, x_col, y_col) {
+  if(!is.numeric(data[[x_col]])){
+    plt <- data %>% ggplot(mapping=aes_string(x_col, y_col))+
+      geom_jitter(alpha=0.5)+
+      geom_smooth(method="lm", se=FALSE)+
+      coord_flip()+
+      labs(title=str_c("Survived: ", x_col, " by ", y_col), subtitle="Points jittered and alpha blended")
+    plt %>% print()
+  }
+}
+
+x_cols %>% walk(gg_scatter, data=df_train, y_col=y_col)
+```
+
+Remove any duplicate rows that could skew the model.
+```{r duplicates}
+# Remove duplicate rows
+df_train <- df_train %>% distinct()
+df_test <- df_test %>% distinct()
+```
+
+Break training set into another testing and training set in order to better evaluate model performance.
+
+```{r training vs test}
+#break training set into additional training and test
+set.seed(1222)
+
+df_train2 <- df_train %>% sample_frac(0.8)
+df_test2 <- df_train %>% setdiff(df_train2)
+```
+
+Normalize the data frame so that large numbers do not skew model results.
+```{r test norm}
+#normalize testing dataframe
+normalize_test <- function(x)(x - mean(x, na.rm=T))/sd(x, na.rm=T)
+
+df_test_norm <- df_test2 %>% mutate_if(is.numeric, normalize_test)
+
+df_test_norm %>% glimpse()
+```
+
+Normalize training data frame based on z-score from test set in order to keep things consistent.
+
+```{r train norm}
+#normalize training dataframe
+normalize_train <- function(col){
+  mean <- mean(df_test2[[col]])
+  std_dev <- sd(df_test2[[col]])
+  calc <- (df_train2[[col]] - mean)/std_dev
+
+  return(calc)
+}
+
+df_train_norm <- df_train2
+df_train_norm$Age <-normalize_train("Age")
+df_train_norm$Fare <-normalize_train("Fare")
+
+df_train_norm %>% glimpse()
+```
+
+Time to build some models.
+
+SibSp, Parch, Ticket, Fare, TicketNbr, Lname, and Title were not statistically significant so they were removed from the model. The features were tested against the label but are not shown in this report.
+
+Model 2 does not include Embarked since not all categories of Embarked are statistically significant.
+
+```{r glm}
+#build statistical models
+
+#mod1
+mod1 <- glm(Survived ~ Pclass+Sex+Age+Embarked, family=binomial(), data=df_train_norm)
+mod1 %>% summary()
+
+#mod2
+mod2 <- glm(Survived ~ Pclass+Sex+Age, family=binomial(), data=df_train_norm)
+mod2 %>% summary()
+
+mod1 %>% glance()
+mod2 %>% glance()
+```
+
+View anova statistics to further assess model.
+
+```{r anova}
+#anova stats
+anova(mod1, test="Chisq")
+anova(mod2, test="Chisq")
+```
+
+Add predictions into dataframe.
+Perform a logistic transformation on the score.
+
+```{r score}
+#score/predict results
+df_test_norm$score1 <- predict(mod1, newdata = df_test_norm)
+df_test_norm$score2 <- predict(mod2, newdata = df_test_norm)
+
+df_test_norm = df_test_norm %>% mutate(score1_prob = exp(score1)/(1 + exp(score1)),
+                                       score2_prob = exp(score2)/(1 + exp(score2)))
+
+df_test_norm %>% glimpse()
+```
+
+View how the score and transformed score are classified.
+
+```{r score dotplots}
+# dotplots for scores
+score_cols <- c("score1","score1_prob","score2","score2_prob")
+
+score_cols %>% walk(gg_dotplot, df_test_norm)
+```
+
+```{r score violin plots}
+#violin plots for scores
+score_cols %>% walk(gg_violin, df_test_norm)
+```
+
+Find optimal thresholds for the models to improve prediction classifications.
+mod1 performs best at 0.65
+mod2 performs best at 0.6
+
+```{r threshold functions}
+#threshold functions
+threshs = c(0.65, 0.60, 0.55, 0.50, 0.45, 0.40, 0.35)
+
+test_threshold1 <- function(thresh){
+  df_test_norm <- df_test_norm %>% mutate(score_pred1 = if_else(score1_prob > thresh, TRUE, FALSE) %>% as.factor())
+  cat('For threshold of ', thresh, ' performance is: \n')
+  print(caret::confusionMatrix(data=df_test_norm$score_pred1, reference = (df_test_norm$Survived %>% as.factor()), mode = "prec_recall"
+  ))
+  cat('\n')
+}
+
+test_threshold2 <- function(thresh){
+  df_test_norm <- df_test_norm %>% mutate(score_pred2 = if_else(score2_prob > thresh, TRUE, FALSE) %>% as.factor())
+  cat('For threshold of ', thresh, ' performance is: \n')
+  print(caret::confusionMatrix(data=df_test_norm$score_pred2, reference = (df_test_norm$Survived %>% as.factor()), mode = "prec_recall"
+  ))
+  cat('\n')
+}
+
+threshs %>% walk(test_threshold1)
+threshs %>% walk(test_threshold2)
+```
+
+Perform a second pass to find the optimal threshold for each model.
+mod1 performs best at 0.7
+mod2 performs best at 0.6
+
+```{r specifc thresh}
+#find more specific thresholds
+threshs = c(0.75,0.74,0.73,0.72,0.71,0.70,0.69,0.68,0.67,0.66,0.65,0.64,0.63,0.62,0.61,0.60,0.59,0.58,0.57,0.56,0.55)
+
+threshs %>% walk(test_threshold1) #0.7
+threshs %>% walk(test_threshold2) #0.6
+```
+
+Test again so compare models side by side.
+
+Model 2 is a slightly better model as it has a higher precision and higher balanced accuracy.
+
+```{r test thresh}
+#test again with better thresholds
+#mod1
+df_test_norm <- df_test_norm %>% mutate(score_pred1 = if_else(score1_prob > 0.7, TRUE, FALSE) %>% as.factor())
+
+cat('For threshold of ', 0.7, ' performance is: \n')
+caret::confusionMatrix(data=df_test_norm$score_pred1, reference = (df_test_norm$Survived %>% as.factor()), mode = "prec_recall")
+
+#mod2
+df_test_norm <- df_test_norm %>% mutate(score_pred2 = if_else(score2_prob > 0.6, TRUE, FALSE) %>% as.factor())
+
+cat('For threshold of ', 0.6, ' performance is: \n')
+caret::confusionMatrix(data=df_test_norm$score_pred2, reference = (df_test_norm$Survived %>% as.factor()), mode = "prec_recall")
+
+```
+
+View ROC curve and AUC as another check for model performance.
+
+```{r ROC/AUC}
+#ROC curve and AUC
+p <- predict(mod2, newdata=subset(df_test_norm,select=(-Survived)), type="response")
+pr <- prediction(p, df_test_norm$Survived)
+prf <- performance(pr, measure = "tpr", x.measure = "fpr")
+plot(prf)
+
+auc <- performance(pr, measure = "auc")
+auc <- auc@y.values[[1]]
+auc
+```
+
+Finally, we can predict results with the original df_test data frame.
+
+First, df_test also needs to be normalized using the same z-score from above.
+
+```{r original test norm}
+#normalize df_test
+normalize_final <- function(col){
+  mean <- mean(df_test2[[col]])
+  std_dev <- sd(df_test2[[col]])
+  calc <- (df_test[[col]] - mean)/std_dev
+
+  return(calc)
+}
+
+df_final <- df_test
+df_final$Age <- normalize_final("Age")
+
+df_final %>% glimpse()
+```
+
+Apply the model.
+
+```{r apply model}
+#apply model
+df_final$score <- predict(mod2, newdata = df_final)
+
+df_final <- df_final %>% mutate(score_prob = exp(score)/(1 + exp(score)))
+
+df_final <- df_final %>% mutate(Survived = if_else(score_prob > 0.6, TRUE, FALSE) %>% as.double(),
+                                PassengerId = as.double(PassengerId)) %>% select(PassengerId,Survived)
+
+df_final %>% return()
+```
+
+Export results.
+
+```{r export}
+write_csv(df_final, path=str_c(path, "titanic_predictions.csv"))
+```
