@@ -2,8 +2,7 @@
 title: "Titanic"
 author: "Catherine Williams"
 date: "April 17, 2019"
-output: html_document:
-keep_md: true
+output: rmarkdown::github_document
 ---
 
 ## Competition Description
@@ -28,7 +27,7 @@ library(ROCR) # ROC curve
 
 First, import the data frames that Kaggle provided.
 
-```{r import}
+```{r import, message=FALSE}
 #import data frames
 path <- "C:/Users/Cat/Google Drive/Data Analysis/Kaggle Competitions/Titanic - Machine Learning/"
   
