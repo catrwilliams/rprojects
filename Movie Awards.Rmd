@@ -1,0 +1,423 @@
+---
+title: "Movie Awards"
+author: "Maria Paracha and Catherine Williams"
+date: "June 5, 2019"
+output:
+  html_document:
+    hightlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+# Problem
+IMDB has immense amounts of data regarding movies. This data can be used to predict movie awards (Oscar, Golden Globes, Bafta, etc). This will help to understand which combination of feature values contribute to bringing a film to success and consequently winning awards. This will almost certainly lead to an increase of profit for those involved in making the film as well.
+
+# Dataset
+36 predictor variables
+
+* 28 discrete 
+* 8 continuous
+
+Label is continuous
+
+##Ground Truths
+Number of Wins
+
+nrOfWins - Number of prizes won by the movie. It is an indicative number that certifies how many are the prizes won even after the first year of release (Oscar, Golden Globe, Bafta, ...)
+
+##Source
+https://www.kaggle.com/gabrielegalimberti/movies-example-for-machine-learning-activities/
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Setup
+
+##Load libraries
+```{r library, message=FALSE, results=FALSE}
+ipak <- function(pkg){
+  new.pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+if (length(new.pkg))
+    install.packages(new.pkg, dependencies = TRUE)
+sapply(pkg, require, character.only = TRUE)
+}
+
+packages <- c("tidyverse","caret","performance","Amelia","rpart","rpart.plot",
+              "randomForest","fastDummies")
+ipak(packages)
+
+theme_set(theme_classic()) #applies classic theme to all charts
+```
+
+##Import Data
+
+```{r reading file}
+movies <- read.csv2("MACHINE_LEARNING_FINAL.csv")
+```
+
+##Change Data Types
+
+```{r data types}
+#change variables to appropriate data types. this will be important for charting later
+movies <- movies %>% mutate_at(vars(Action:Western),as.logical)
+movies <- movies %>% mutate_at(vars(ratingInteger,nrOfGenre),as.factor)
+```
+
+#Exploratory Data Analysis
+Overall, this is high quality data. There are no missing values and there are not too many strong correlations. However, some variables are not normally distributed- they are skewed to the left.
+
+##View Data
+
+##Missing Values
+There are no missing values
+
+```{r missing values}
+#Visualize missing values
+missmap(movies, main = "Missing Values vs. Observed")
+```
+
+##Correlations
+There are some variables with high correlations (>|0.5|) that will need to have feature engineering. There are also some moderate correlations (|0.3| to |0.5|) that should be monitored but do not necessarily need to be excluded initially.
+
+```{r corr, warning=FALSE, out.width="75%"}
+#view correlations, drop the insignificant relationships, sort by highest to lowest, 
+#and visualize results graphically
+corr_simple <- function(data=movies,drop="nrOfWins"){
+  df_cor <- data %>% mutate_if(is.factor, as.numeric) %>% select(-drop)
+  
+  corr <- cor(df_cor)
+  corr[lower.tri(corr,diag=TRUE)] <- NA  #Prepare to drop duplicates and correlations of 1
+  corr[corr == 1] <- NA #drop perfect correlations
+  corr <- as.data.frame(as.table(corr)) #Turn into a 3-column table
+  corr <- na.omit(corr) #remove the NA values from above
+  corr <- subset(corr, abs(Freq) > 0.3) #select significant values
+  corr <- corr[order(-abs(corr$Freq)),] #Sort by highest correlation
+  print(corr)
+
+  #turn corr back into matrix in order to plot with corrplot
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  #plot correlations visually
+  corrplot::corrplot(mtx_corr, is.corr=FALSE, tl.col="black", na.label=" ")
+}
+
+corr_simple()
+```
+
+##Variable Trends
+Conclusions made from these charts:
+
+* Recent years have more data points. This could be due to increased user adoption on IMDB.
+* It appears there are positive relationships between the number of awards and lifetime gross, rating count, number of pictures, news articles, and user reviews. However, most of the data is clustered at lower values so these may not be very strong predictors.
+* The higher the rating, the higher the number of awards won with a few outliers. There is a large increase in number of awards with ratings of 8 and 9.
+* Movie duration doesn't necessarily relate to number of awards.
+* Unsurprisingly, the number of nominations has a very strong positive relationship with the number of awards.
+* Movie genres do not appear to play a big role in number of awards except for Biography and War films.
+
+```{r trends, out.width="50%"}
+gg_plot <- function(x_col, y_col=movies$nrOfWins, data=movies){
+  if(is.numeric(data[[x_col]])){
+      p1 <- data %>% ggplot(mapping=aes_string(x_col, y_col))+
+        geom_jitter(alpha=0.5)+
+        geom_smooth(method="loess", se=FALSE)+
+        labs(title=str_c("Awards vs ", x_col), y="label")
+      p1 %>% print()
+      #histogram with Freedman-Diaconis rule for binwidth
+      h <- hist(data[[x_col]], breaks = "FD", plot = FALSE) 
+      p2 <- ggplot(data, aes_string(x_col))+
+        geom_histogram(aes(y = ..density..), breaks=h$breaks, alpha=0.3, col="white")+
+        geom_density(size = 1) +
+        labs(title=str_c("Histogram and density for ", x_col))
+      p2 %>% print()
+    }
+  else{
+    p3 <- ggplot(data, aes_string(x_col, y_col))+
+      geom_boxplot()+
+      geom_hline(yintercept=mean(y_col), color="red")+
+      geom_hline(yintercept=median(y_col), color="blue", linetype="dashed")+
+      labs(title=str_c("Awards: Number of Wins by ", x_col), 
+           subtitle="Showing mean(red), median(blue)")
+    p3 %>% print()
+    }
+}
+
+cols <- movies %>% select(-1) %>% names()
+cols %>% walk(gg_plot)
+```
+
+#Data Wrangling
+##Data Cleaning
+* Excluded columns that don't have any useful data (Title, Adult, RealityTV, TalkShow)
+* Removed outliers for year, ratingCount, and nrOfPhotos (these all improved model performance)
+
+```{r clean, out.width="75%"}
+#remove movie title and columns that do not have more than 1 unique value
+movies <- movies[, sapply(movies, function(col) length(unique(col))) > 1] %>% select(-1)
+
+#Exclude outliers for year
+outliers <- boxplot(movies$year, main="Boxplot for year (with outliers)")$out
+movies <- movies[-which(movies$year %in% outliers),]
+#view new boxplot after outliers have been removed
+boxplot(movies$year, main="Boxplot for year")
+
+#Exclude outliers for ratingCount
+outliers <- boxplot(movies$ratingCount, main="Boxplot for ratingCount (with outliers)")$out
+movies <- movies[-which(movies$ratingCount %in% outliers),]
+#view new boxplot after outliers have been removed
+boxplot(movies$ratingCount, main="Boxplot for ratingCount")
+
+#Exclude outliers for nrOfPhotos
+outliers <- boxplot(movies$nrOfPhotos, main="Boxplot for nrOfPhotos (with outliers)")$out
+movies <- movies[-which(movies$nrOfPhotos %in% outliers),]
+#view new boxplot after outliers have been removed
+boxplot(movies$nrOfPhotos, main="Boxplot for nrOfPhotos")
+```
+
+##Feature Engineering
+Popularity was created to remove some correlated variables.
+
+Logarithmic and square root transformations were performed to improve the distributions of numeric variables. Overall, logarithmic transformations performed better but if there were zeros in the data, square root transformations were used instead to avoid having infinite values.
+
+```{r transform, out.width="50%"}
+movies <- movies %>% 
+          mutate(Popularity = ratingCount+nrOfUserReviews+nrOfNewsArticles+nrOfPhotos) %>% 
+                select(-ratingCount,-nrOfUserReviews,-nrOfNewsArticles,-nrOfPhotos)
+
+movies <- movies %>% 
+   mutate(year.log=log(year),
+          duration.log=log(duration),
+          Popularity.log=log(Popularity),
+          lifetime_gross.log=log(lifetime_gross),
+          nrOfWins.sqr = sqrt(nrOfWins),
+          nrOfNominations.sqr = sqrt(nrOfNominations)) %>% 
+  select(-year,-duration,-Popularity,-nrOfNominations,-lifetime_gross)
+
+movies %>% glimpse() 
+
+cols <- movies %>% select(26:31) %>% names()
+cols %>% walk(gg_plot, y_col=movies$nrOfWins.sqr)
+```
+
+##Check Correlations Again
+
+There are still some moderate correlations, in particular between the engineered Popularity.log and lifetime_gross.log. lifetime_gross.log will be dropped.
+
+```{r corr check, out.width="75%"}
+corr_simple(drop=c("nrOfWins","nrOfWins.sqr"))
+```
+
+```{r}
+movies <- movies %>% select(-lifetime_gross.log)
+```
+
+##Normalize Data
+Normalize the data frame so that model is not skewed by different types of measurements.
+
+```{r norm}
+#normalize dataframe
+normalize <- function(x)(x - mean(x, na.rm=T))/sd(x, na.rm=T)
+
+movies <- movies %>% 
+          mutate_at(vars(year.log,duration.log,Popularity.log,nrOfNominations.sqr), normalize)
+
+movies %>% glimpse()
+```
+##Training and Testing Sets
+Using 70% data to train the model and 30% to test
+
+```{r train and test}
+#for use with linear regression
+#convert to numeric dummy variables
+movies_num <- dummy_cols(movies) %>% select(-ratingInteger,-nrOfGenre)
+movies_num <- movies_num %>% mutate_if(is.logical,as.integer)
+
+set.seed(123)
+train_num <- movies_num %>% sample_frac(0.7)
+test_num <- movies_num %>% setdiff(train_num)
+
+#for use with regression trees
+set.seed(123)
+train <- movies %>% sample_frac(0.7)
+test <- movies %>% setdiff(train)
+```
+
+#Models
+## Linear Regression (by AIC)
+R-squared: 76.16%
+
+```{r lm AIC step, results=FALSE}
+#Linear Regression Model
+lmodel <- lm(nrOfWins.sqr ~ . -nrOfWins, data = train_num)
+
+#best model by AIC
+#automatically steps through and removes features based on 
+#getting the lowest AIC value for the model
+lmodel_AIC <- lmodel %>% step() 
+```
+```{r lm AIC}
+lmodel_AIC %>% summary()
+
+#variable importance sorted from highest to lowest
+varImp_sort <- function(mod){
+  imp <- as.data.frame(varImp(mod))
+  imp <- data.frame(names   = rownames(imp),
+                  overall = imp$Overall)
+  imp[order(imp$overall,decreasing = T),]
+}
+
+varImp_sort(lmodel_AIC)
+
+model_performance(lmodel_AIC, metrics=c("AIC","R2","RMSE"))
+```
+
+## Linear Regression (by p-value)
+R-squared: 76.08%
+
+```{r lm p}
+#best model by p-value
+lmodel_p <- lm(nrOfWins.sqr ~ Action + Adventure + Animation + Documentary + Family + 
+                 Fantasy + Musical + Thriller + year.log + nrOfNominations.sqr + 
+                 ratingInteger_8 + ratingInteger_9 + ratingInteger_7 + ratingInteger_3, 
+               data=train_num)
+
+summary(lmodel_p)
+varImp_sort(lmodel_p)
+
+model_performance(lmodel_p, metrics=c("AIC","R2","RMSE"))
+```
+
+## Linear Regression (by important)
+R-squared: 76.08%
+
+```{r lm i}
+#best model by important features
+lmodel_i <- lm(nrOfWins.sqr ~ Action + Biography + War + Adventure + Animation + 
+                 Documentary + Family + Fantasy + Musical + Thriller + year.log + 
+                 nrOfNominations.sqr + ratingInteger_8 + ratingInteger_9 + Popularity.log, 
+               data=train_num)
+
+summary(lmodel_i)
+varImp_sort(lmodel_i)
+
+model_performance(lmodel_p, metrics=c("AIC","R2","RMSE"))
+```
+
+##Regression Tree
+R-squared: 80.17 %
+
+```{r tree}
+#building a decision tree
+dtModel <- rpart(nrOfWins.sqr~.-nrOfWins, data = train, method="anova", cp=.001)
+
+#view results
+plotcp(dtModel) #visualize cross validation results
+varImp_sort(dtModel) #view variable importance
+printcp(dtModel) #display results
+
+#plot variable importance
+impvar <- varImp_sort(dtModel) %>% filter(overall>0) %>% arrange(overall) %>% 
+          mutate(names = factor(names, unique(names)))
+impvar %>% ggplot(aes(names, overall))+
+  geom_bar(stat = "identity")+
+  coord_flip()+
+  labs(title="Regression Tree Variable Importance")
+
+#gather R-squared value
+tmp <- printcp(dtModel)
+rsq.val <- 1-tmp[nrow(tmp),3]   #extract R-squared from final split
+cat("\nR-squared: ", round(rsq.val*100,2),"% \n")
+```
+```{r tree plot, out.width="100%"}
+#plot tree
+rpart.plot(dtModel, extra=1, varlen=-1, digits=1, main="Regression Tree for Movie Awards")
+```
+
+##Random Forest
+R-squared: 76.76%
+
+```{r forest}
+set.seed(123)
+rfModel <- randomForest(nrOfWins.sqr ~ .-nrOfWins, ntree=400, mtry=15, data=train, 
+                        importance=TRUE, corr.bias=TRUE)
+rfModel
+plot(rfModel)
+
+varImp_sort(rfModel)
+varImpPlot(rfModel, n.var=10, main="Random Forest Top 10 Important Variables")
+```
+
+# Model Performance
+Performance is being measured by R-squared. This value is derived from using the square of the correlation between the actual values and predicted values.
+
+The following R-squared values were calculated using the test set:
+* lmodel_AIC - 69.27%
+* lmodel_p - 69.57%
+* lmodel_i - 69.77%
+* dtModel - 61.48%
+* rfModel - 64.85%
+
+```{r predict, warning=FALSE, out.width="50%"}
+#prediction and accuracy function
+predict_score <- function(mod, data){
+  mod_name <- deparse(substitute(mod))
+  
+  #predict results
+  data <- data %>% mutate(score = predict(mod, newdata=data), #predict results using model
+                         resids = nrOfWins.sqr - score,
+                         #unsquare the results and round to whole number- 
+                         #there cannot be partial awards
+                         predictedwins = round(score*score))
+  
+  #return accuracy
+  df_cor <- data %>% select(predictedwins,nrOfWins)
+  corr <- cor(df_cor)^2
+  corr[lower.tri(corr,diag=TRUE)] <- NA  #Prepare to drop duplicates and correlations of 1
+  corr <- as.data.frame(as.table(corr)) #Turn into a 3-column table
+  corr <- na.omit(corr) #remove the NA values from above
+  cat(mod_name, "R-squared: ", round(corr$Freq*100, 2),"% \n") #print accuracy
+  
+  #plot results
+  #histogram with Freedman-Diaconis rule for binwidth
+  h <- hist(data$resids, breaks = "FD", plot = FALSE) 
+  hd <- data %>% ggplot(aes(resids, ..density..))+
+    geom_histogram(breaks=h$breaks)+
+    geom_density(color="red", size=1)+
+    labs(title=str_c(mod_name, " histogram and density plot for residuals"), 
+         x="Residual value", subtitle="using test set")
+  qq <- data %>% ggplot(aes(sample=resids))+
+    geom_qq()+
+    geom_qq_line(color="red")+
+    labs(title=str_c(mod_name, " quantile-quantile Normal plot of residuals"), 
+         subtitle="using test set")
+  fit <- data %>% ggplot(aes(score, resids))+
+    geom_point()+
+    geom_smooth(method="loess", color="red")+
+    labs(title=str_c(mod_name, " residuals vs. fitted values"), 
+         x="Fitted values", y="Residuals", subtitle="using test set")
+  hd %>% print()
+  qq %>% print()
+  fit %>% print()
+}
+
+#predict with the test data
+AIC_pred <- predict_score(lmodel_AIC, test_num)
+p_pred <- predict_score(lmodel_p, test_num)
+i_pred <- predict_score(lmodel_i, test_num)
+dt_pred <- predict_score(dtModel, test)
+rf_pred <- predict_score(rfModel, test)
+```
+
+#Conclusion
+lmodel_i is the best model with an R-squared of 69.77% against the test data. It shows that nrOfWins.sqr is modeled by nrOfNominations.sqr, ratingInteger_8, year.log, Documentary, Family, Adventure, ratingInteger_9, Thriller, Animation, Action, Musical, Fantasy, Biography, War, and Popularity.log. The residuals compared to fitted values are in a fairly straight line and close to 0 except at the higher end. The residuals plot is a fairly normal distribution. The quantile quantile plot is reasonably straight, except at the ends where there is more noise.
+
+All of the other models have very similar results with the decision tree being the worst at 61.28%.
+
+To improve accuracy results, nrOfWins could have been turned into a binary variable for whether an award was earned or not. Doing a really quick generalized linear model of this (not shown since it is out of scope of this project) resulted in ~95% accuracy against the test set. This project is predicting number of awards, however, and not whether an award was received or not.
+
+Another thing that could have been done to improve the models would be to gather more movie data including actors/actresses, producer, etc. These basic movie stats are likely not enough to explain all the variance with number of movie awards.
