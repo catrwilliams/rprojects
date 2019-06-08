@@ -1,4 +1,3 @@
-This repository contains my code for Tidy Tuesday submissions
+#Tidy Tuesday Submissions
 
-Submissions:
-6/8/19 - Ramen Ratings
+- 6/8/19 - Ramen Ratings
