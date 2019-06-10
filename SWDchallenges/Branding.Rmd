@@ -1,0 +1,117 @@
+---
+title: "Branding"
+author: "Catherine Williams"
+date: "June 9, 2019"
+output:
+  html_document:
+    hightlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+# Challenge Description
+
+This month, the challenge is to test your design design skills and rebrand this graph:
+
+![](C:/Users/Cat/Google Drive/Data Analysis/SWD Challenges/06-2019/SWDstyled+graph.png)
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library, message=FALSE, results=FALSE}
+#function to check if packages are installed, if not then install them, and load all packages
+libraries <- function(packages){
+  for(package in packages){
+    #checks if package is installed
+    if(!require(package, character.only = TRUE)){
+      #If package does not exist, then it will install
+      install.packages(package, dependencies = TRUE)
+      #Loads package
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+packages <- c("tidyverse","readxl","lubridate","showtext","cowplot","grid","png")
+
+libraries(packages)
+```
+
+## Import Data
+
+```{r import, message=FALSE}
+df <- read_excel("C:/Users/Cat/Google Drive/Data Analysis/SWD Challenges/06-2019/SWDchallenge_June19.xlsx", range="C6:Z7")
+```
+
+# View Data
+
+```{r view}
+glimpse(df)
+head(df)
+```
+
+# Data Cleaning
+
+```{r clean}
+df <- df %>% gather(date, sales, c(1:24))
+
+df <- df %>% mutate(date = seq(as.Date("2018/1/1"),as.Date("2019/12/1"),"month"),
+                    month = month(date, label=TRUE),
+                    month = str_sub(month,1,1) %>% as.factor())
+```
+
+# Branding
+
+All branding information came from [https://www.washington.edu/brand/](https://www.washington.edu/brand/).
+
+The main branding elements were custom fonts and colors as well as the University of Washington logo.
+
+```{r brand}
+font_add(family="EncodeSansNormal", regular="C:/Users/Cat/Google Drive/Data Analysis/SWD Challenges/06-2019/EncodeSansNormal-900-Black.ttf")
+
+font_add_google(name="Open Sans", family="OpenSans")
+
+showtext_auto()
+
+logo <- readPNG("C:/Users/Cat/Google Drive/Data Analysis/SWD Challenges/06-2019/UW_logo.png")
+```
+
+# Visualization
+
+```{r viz}
+uw <- df %>% ggplot(aes(date, sales)) +
+  geom_vline(xintercept=as.Date("2019-01-01"), alpha=0.15)+
+  geom_line(data=subset(df,date < as.Date("2019-07-01")), color="#4b2e83", size=2)+
+  geom_ribbon(data=subset(df,date > as.Date("2019-05-01")), ymin=-1, ymax=4, fill="#F5F5F5")+
+  geom_line(data=subset(df,date > as.Date("2019-05-01")), color="#4b2e83", size=2, linetype=2)+
+  geom_point(data=subset(df,month=="J" & date < as.Date("2019-07-01") | date=="2019-12-01"), 
+             color="#b7a57a", size=3.5)+
+  annotate("text", label="2018", x=as.Date("2018-06-15"), y=0, color="#4b2e83")+
+  annotate("text", label="2019", x=as.Date("2019-07-15"), y=0, color="#4b2e83")+
+  annotation_custom(rasterGrob(logo, interpolate=TRUE, width=unit(3,"inches"), vjust=-3.5))+
+  scale_y_continuous(limits=c(0,3.5), breaks=c(0,0.5,1,1.5,2,2.5,3,3.5))+
+  scale_x_date(breaks=df$date, labels=format(df$date,"%b"))+
+  labs(title="MARKET SIZE OVER TIME", y="Sales ($B)",
+       caption="Forecast provided by ABC consultants, based on data through June 2019; assumes no major market changes")+
+  theme(text=element_text(family="EncodeSansNormal", color="#4b2e83"),
+        plot.title=element_text(size=30,hjust=0.1),
+        plot.caption=element_text(size=8,hjust=0.5),
+        axis.text=element_text(color = "#85754d", family="OpenSans"),
+        axis.title.x=element_blank(),
+        axis.text.x=element_text(angle=90))
+
+img <- axis_canvas(uw, axis='y') +
+  draw_image("C:/Users/Cat/Google Drive/Data Analysis/SWD Challenges/06-2019/purple_bar.png", interpolate=TRUE, x=-.335, y=-8, scale=9.5)
+
+sub <- add_sub(uw, "*Disclaimer: This is fake data for an illustrative branding exercise", size=8)
+
+ggdraw(insert_xaxis_grob(sub, img, unit(0.01, "null"), position="top"))
+```
+
