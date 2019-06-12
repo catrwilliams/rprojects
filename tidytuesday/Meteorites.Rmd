@@ -1,0 +1,218 @@
+---
+title: "Meteorites"
+author: "Catherine Williams"
+date: "June 12, 2019"
+output:
+  html_document:
+    hightlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+# Project Description
+
+Tidy Tuesday has a weekly data project aimed at the R ecosystem. An emphasis is placed on understanding how to summarize and arrange data to make meaningful charts with ggplot2, tidyr, dplyr, and other tools in the tidyverse ecosystem.
+
+# Dataset
+Data came from [NASA](https://data.nasa.gov/Space-Science/Meteorite-Landings/gh4g-9sfh/data). The data includes meteorite information such as the class, mass, and location when meteorites were found/fallen.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+setwd("~/../Google Drive/Data Analysis/Tidy Tuesday/06-11-19 - Meteorites")
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library, message=FALSE, results=FALSE}
+#function to check if packages are installed, if not then install them, and load all packages
+libraries <- function(packages){
+  for(package in packages){
+    #checks if package is installed
+    if(!require(package, character.only = TRUE)){
+      #If package does not exist, then it will install
+      install.packages(package, dependencies = TRUE)
+      #Loads package
+      library(package, character.only = TRUE)
+    }
+  }
+}
+
+packages <- c("tidyverse","readxl","visdat","modeest","maps","ggthemes","RColorBrewer")
+
+libraries(packages)
+
+theme_set(theme_classic()) #applies classic theme to all charts
+```
+
+## Import Data
+
+```{r import, message=FALSE}
+df <- read.csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-06-11/meteorites.csv")
+```
+
+# Data Wrangling
+
+- There are 45,716 observations and 10 variables.
+- There are several NA values that will be looked at in more detail later.
+- name and id are both unique identifiers
+- geolocation is just the summary of both lat and long
+- there a bunch of coordinates entered as 0 - these are basically NA
+
+## View Data
+
+```{r view}
+glimpse(df)
+head(df)
+summary(df)
+sapply(df, function(x) n_distinct(x)) %>% sort()
+```
+
+## Missing Values
+
+View missing values in more detail and remove or fix them.
+
+```{r missing}
+#Visualize missing values
+vis_miss(df[,colSums(is.na(df)|df==0) >0], sort_miss=TRUE)
+
+#see count of missing values
+na_values <- function(df){
+  na <- colSums(is.na(df)|df==0) %>% sort(decreasing=TRUE)
+  na[na>0]
+}
+
+na_values(df)
+
+#remove NA coordinates
+df <- df %>% drop_na(geolocation)
+
+#remove missing coordinates
+df <- subset(df, lat!=0 & long!=0)
+```
+
+## Feature Engineering
+
+Meteorite classification data came from [The Meteorite Market](http://www.meteoritemarket.com/type.htm). The table includes merged cells so it came over a lot cleaner after copy/pasting into Excel and then unmerging all cells.
+
+```{r feature, message=FALSE}
+#import classification table to match class and determine category
+df_class <- read_xlsx("classifications.xlsx", skip=3)
+df_class <- df_class %>% select(category=Category,class=`Letter Designation`,comp=`Composition Type`)
+
+#remove rows with NA in class
+df_class <- df_class %>% drop_na(class)
+
+#set category to the correct values and clean data to make the class column optimal for matching
+df_class <- df_class %>% 
+  mutate(category = case_when((row_number() <= which(df_class[,2] == "R")) ~ "Chondrites",
+                             (row_number() >= which(df_class[,2] == "HOW") & 
+                                row_number() <= which(df_class[,2] == "WIN")) ~ "Achondrites",
+                             (row_number() >= which(df_class[,2] == "H") & 
+                                row_number() <= which(df_class[,2] == "D")) ~ "Irons (structural)",
+                             (row_number() >= which(df_class[,2] == "IAB") & 
+                                row_number() <= which(df_class[,2] == "Anom")) ~ "Irons (chemical)",
+                             (row_number() >= which(df_class[,2] == "PAL")) ~ "Stony Irons",
+                              TRUE ~ category),
+        comp = str_replace(comp,"([:graph:]+\\s+[:graph:]+)\\s.*",""),
+        class = str_split(class, ",\\s|.\\s|-")) %>% unnest(class)
+
+#replace blank values with NAs
+df_class$comp[df_class$comp == ""]<-NA
+
+df_class <- df_class %>% mutate(comp = str_split(comp, "\\s\\(")) %>% unnest(comp)
+df_class <- df_class %>% mutate(comp = str_replace(comp, "\\*|\\)", ""),
+                                comp = str_extract(comp, ".*[^s$]"))
+
+#combine the comp and class column since the data uses both variations as its classification
+df_class <- df_class %>% gather(column, class, comp:class) %>% select(-column) %>% distinct() %>% drop_na()
+
+#make sure the original df has clean class columns for matching
+df <- df %>% mutate(class = str_replace_all(class, "[:punct:]+|~+", " "))
+
+#function to find if any string value in class matches in df_class 
+find_cat <- function(x, patterns, replacements=patterns, fill=NA, ...){
+  stopifnot(length(patterns) == length(replacements))
+
+  ans = rep_len(as.character(fill), length(x))    
+  empty = seq_along(x)
+
+  for(i in seq_along(patterns)) {
+      greps = grepl(patterns[[i]], x[empty], ...)
+      ans[empty[greps]] = replacements[[i]]  
+      empty = empty[!greps]
+  }
+  return(ans)
+}
+
+df$category <- find_cat(df$class, df_class$class, df_class$category, NA, ignore.case = TRUE)
+
+#view the class values that still need to be worked on
+df[!df$class %in% df_class$class & df$category %in% NA,] %>% select(class,category) %>% distinct()
+
+#classify the remaining classes
+#according to https://en.wikipedia.org/wiki/Ordinary_chondrite OC is a Chondrite
+df <- df %>% mutate(category = case_when(str_detect(class, "^C|LL|L|E|OC") ~ "Chondrites",
+                                        TRUE ~ category),
+                    category = replace_na(category, mfv(category, na.rm=T))) #the remaining values cannot be classified. Using mode to give them a value
+```
+
+## Data Types
+
+Convert characters to factors
+
+```{r data}
+#finally change the data types back to factors and remove duplicates that were made above
+df <- df %>% mutate_if(is.character,as.factor)
+```
+
+# Visualizations
+
+## World
+```{r world, out.width="100%"}
+world <- map_data("world")
+
+#practice using geom_polygon
+ggplot(world, aes(x=long, y=lat, group=group))+
+  geom_polygon(fill="#f2e6d9",color = "white")+
+  geom_point(df, mapping=aes(group=category, color=category), alpha=0.5, size=0.5)+
+  coord_map(xlim=c(-180,180))+
+  theme_map()+
+  scale_color_brewer(palette="Set1")+
+  labs(title="Meteorite Categories Across The World", color="Category")+
+  guides(color=guide_legend(override.aes=list(size=4)))+
+  theme(plot.background=element_rect(fill="#ccefff"),
+        legend.position=c(0, 0.09),
+        legend.background=element_rect(fill="#ccefff"),
+        legend.key=element_rect(fill="#ccefff"),
+        plot.title=element_text(size=14, hjust=0.5),
+        legend.title.align=0.5,
+        legend.title=element_text(face="bold"))
+```
+
+## United States
+```{r usa, message=FALSE, out.width="100%"}
+state <- map_data("state")
+outline <- map_data("usa")
+
+##practice using geom_map
+ggplot() +
+  geom_map(data=state, aes(x=long, y=lat, group=group, map_id=region), fill="#f8f2ec",color="grey", map=state)+
+  geom_map(data=outline, map=outline, aes(long, lat, map_id=region), color="black", fill=NA, size=0.5)+
+  geom_point(df, mapping=aes(x=long, y=lat, group=category, color=category), alpha=0.8, size=0.9)+
+  coord_map(xlim=c(-124.7, -67.1), ylim = c(25.2, 49.4)) +
+  theme_map()+
+  labs(title="Meteorite Categories Across The United States", color="Category")+
+  scale_color_brewer(palette="Set1")+
+  guides(color=guide_legend(override.aes=list(size=4)))+
+  theme(plot.background=element_rect(fill="#e6f7ff"),
+        legend.position=c(0.83, 0.02),
+        legend.background=element_rect(fill="#e6f7ff"),
+        legend.key=element_rect(fill="#e6f7ff"),
+        plot.title=element_text(size=14, hjust=0.5),
+        legend.title.align=0.5,
+        legend.title=element_text(face="bold"))
+```
