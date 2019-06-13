@@ -196,7 +196,7 @@ ggplot(world, aes(x=long, y=lat, group=group))+
 ## United States
 
 ### Prepare Data Frame
-```{r usa data, message=FALSE, warning=FALSE, out.width="50%"}
+```{r usa data, message=FALSE, warning=FALSE}
 state <- map_data("state")
 usa <- map_data("usa")
 
@@ -211,7 +211,6 @@ points <- cbind(long,lat)
 polypoints <- cbind(x,y)
 
 #plot the polygon and all points to be checked
-plot.new()
 plot(rbind(polypoints,points))
 polygon(polypoints,col="red")
 
@@ -220,7 +219,6 @@ out <- pnt.in.poly(points,polypoints)
 summary(out)
 
 #identify points not in the polygon with an x
-plot.new()
 plot(rbind(polypoints,points))
 polygon(polypoints,col='#99999990')
 points(out[which(out$pip==0),1:2],pch=4,col="red")
@@ -231,7 +229,7 @@ df_usa <- bind_cols(df,out) %>% select(-long1,-lat1) %>% filter(pip==1)
 
 ### Visualization
 
-```{r usa, message=FALSE, out.width="100%"}
+```{r usa, message=FALSE, warning=FALSE, out.width="100%"}
 ##practice using geom_map
 ggplot() +
   geom_map(data=state, aes(x=long, y=lat, group=group, map_id=region), fill="#f8f2ec",color="grey", map=state)+
