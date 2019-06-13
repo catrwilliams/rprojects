@@ -41,7 +41,7 @@ libraries <- function(packages){
   }
 }
 
-packages <- c("tidyverse","readxl","visdat","modeest","maps","ggthemes","RColorBrewer")
+packages <- c("tidyverse","readxl","visdat","modeest","maps","ggthemes","RColorBrewer","SDMTools")
 
 libraries(packages)
 
@@ -194,16 +194,50 @@ ggplot(world, aes(x=long, y=lat, group=group))+
 ```
 
 ## United States
-```{r usa, message=FALSE, out.width="100%"}
-state <- map_data("state")
-outline <- map_data("usa")
 
+### Prepare Data Frame
+```{r usa data, message=FALSE, warning=FALSE, out.width="50%"}
+state <- map_data("state")
+usa <- map_data("usa")
+
+#filter out points that do not belong in the usa
+x=usa$long
+y=usa$lat
+long=df$long
+lat=df$lat
+
+#define the points and polygon
+points <- cbind(long,lat)
+polypoints <- cbind(x,y)
+
+#plot the polygon and all points to be checked
+plot.new()
+plot(rbind(polypoints,points))
+polygon(polypoints,col="red")
+
+#check which points fall within the polygon
+out <- pnt.in.poly(points,polypoints)
+summary(out)
+
+#identify points not in the polygon with an x
+plot.new()
+plot(rbind(polypoints,points))
+polygon(polypoints,col='#99999990')
+points(out[which(out$pip==0),1:2],pch=4,col="red")
+
+#filter df for only the relevant points
+df_usa <- bind_cols(df,out) %>% select(-long1,-lat1) %>% filter(pip==1)
+```
+
+### Visualization
+
+```{r usa, message=FALSE, out.width="100%"}
 ##practice using geom_map
 ggplot() +
   geom_map(data=state, aes(x=long, y=lat, group=group, map_id=region), fill="#f8f2ec",color="grey", map=state)+
-  geom_map(data=outline, map=outline, aes(long, lat, map_id=region), color="black", fill=NA, size=0.5)+
-  geom_point(df, mapping=aes(x=long, y=lat, group=category, color=category), alpha=0.8, size=0.9)+
-  coord_map(xlim=c(-124.7, -67.1), ylim = c(25.2, 49.4)) +
+  geom_map(data=usa, map=usa, aes(long, lat, map_id=region), color="black", fill=NA, size=0.5)+
+  geom_point(df_usa, mapping=aes(x=long, y=lat, group=category, color=category), alpha=0.8, size=0.9)+
+  coord_map("polyconic", xlim=c(-124.7, -67.1), ylim = c(25.2, 49.4)) +
   theme_map()+
   labs(title="Meteorite Categories Across The United States", color="Category")+
   scale_color_brewer(palette="Set1")+
