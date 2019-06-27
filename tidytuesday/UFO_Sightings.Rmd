@@ -1,0 +1,196 @@
+---
+title: "UFO Sightings"
+author: "Catherine Williams"
+date: "June 26, 2019"
+output:
+  html_document:
+    hightlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+# Project Description
+
+Tidy Tuesday has a weekly data project aimed at the R ecosystem. An emphasis is placed on understanding how to summarize and arrange data to make meaningful charts with ggplot2, tidyr, dplyr, and other tools in the tidyverse ecosystem.
+
+# Dataset
+Data came from [The National UFO Reporting Center](http://www.nuforc.org/). The data includes UFO sighting information such as date/time it was observed, location, UFO shape, and a description of the event.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+setwd("~/../Google Drive/Data Analysis/Tidy Tuesday/06-25-19 - UFO Sightings/")
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("data.table","tidyverse","visdat","lubridate","rworldmap","sp","rworldxtra","maps","countrycode","ggridges")
+
+theme_set(theme_classic())
+```
+
+## Import Data
+
+```{r import}
+df <- fread("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-06-25/ufo_sightings.csv")
+```
+# Exploratory Data Analysis
+
+- There are 80,332 observations and 11 variables.
+- Most of the missing values are with state and country which could be looked up based on the coordinates.
+
+## View Data
+
+```{r view}
+glimpse(df)
+head(df)
+summary(df)
+sapply(df, function(x) n_distinct(x)) %>% sort()
+
+df %>% count(ufo_shape, sort=TRUE)
+```
+
+## Missing Values
+
+View missing values in more detail.
+
+```{r missing}
+#Visualize missing values
+vis_miss(df, sort_miss=TRUE)
+
+#see count of missing values
+na_values <- function(df){
+  na <- colSums(is.na(df)) %>% sort(decreasing=TRUE)
+  na[na>0]
+}
+
+na_values(df)
+```
+
+# Data Wrangling
+
+Remove/replace missing values and drop unnecessary columns
+
+```{r wrangle}
+df$latitude[is.na(df$latitude)] <- 33.2001
+
+# The single argument to this function, points, is a data.frame in which:
+#   - column 1 contains the longitude in degrees
+#   - column 2 contains the latitude in degrees
+coords2country = function(points){  
+  countriesSP <- getMap(resolution='high') # uses high res map from rworldxtra
+
+  #setting CRS directly to that from rworldmap
+  pointsSP = SpatialPoints(points, proj4string=CRS(proj4string(countriesSP)))  
+
+  # use 'over' to get indices of the Polygons object containing each point 
+  indices = over(pointsSP, countriesSP)
+
+  # return the names of each country
+  indices$ISO3
+}
+
+df$country <- coords2country(df[,c(11,10)])
+
+#function to find if any string value matches, then make replacement 
+find_string <- function(x, patterns, replacements=patterns, fill=NA, ...){
+  stopifnot(length(patterns) == length(replacements))
+
+  ans = rep_len(as.character(fill), length(x))    
+  empty = seq_along(x)
+
+  for(i in seq_along(patterns)) {
+      greps = grepl(patterns[[i]], x[empty], ...)
+      ans[empty[greps]] = replacements[[i]]  
+      empty = empty[!greps]
+  }
+  return(ans)
+}
+
+#prepare to match on country names found in city_area column
+country <- map("world")
+country <- country$names %>% as_data_frame()
+country$iso <- country$value %>% countrycode(origin="country.name",destination="iso3c")
+
+country <- separate_rows(country, value, sep=":")
+country <- country %>% filter(str_detect(value, "[:alpha:]+") & !is.na(iso)) %>% distinct()
+
+df$country <- find_string(df$city_area, country$value, country$iso, df$country, ignore.case = TRUE)
+
+
+#prepare to match on state abbreviations for countries in the USA
+data(state.fips)
+state.fips <- state.fips %>% select(abb) %>% distinct()
+state.fips <- add_row(state.fips, abb = c("AK","HI"))
+state.fips <- add_column(state.fips, country = "USA")
+
+df$country <- find_string(df$state, state.fips$abb, state.fips$country, df$country, ignore.case = TRUE)
+
+#sort out country values that are still NA
+df[is.na(df$country),] %>% select(city_area) %>% distinct()
+
+df <- df %>% 
+  mutate(date_time = parse_date_time(date_time, 'mdy_hm'),
+         country = as.character(country),
+         country = case_when(is.na(country) & str_detect(city_area, "u\\.|uss|whitehouse") ~ "USA",
+                             is.na(country) & str_detect(city_area, "viet nam") ~ "VNM", 
+                             is.na(country) & str_detect(city_area, "britsh virgin islands") ~ "VGB",
+                             is.na(country) & str_detect(city_area, "virgin") ~ "VIR",
+                             is.na(country) & str_detect(city_area, "playa del cura|costa adeje|gibraltar") ~ "ESP",
+                             is.na(country) & str_detect(city_area, "faliraki") ~ "GRC",
+                             TRUE ~ country),
+        ufo_shape = case_when(ufo_shape %in% "changed" ~ "changing",
+                              ufo_shape %in% "round" ~ "circle",
+                              ufo_shape %in% "flare" ~ "light",
+                              ufo_shape %in% c("pyramid","delta") ~ "triangle",
+                              is.na(ufo_shape) ~ "unknown",
+                              TRUE ~ ufo_shape),
+         country = replace_na(country, "Ocean"))
+
+#view missing data again
+na_values(df)
+
+
+df$continent <- df$country %>% countrycode(origin="iso3c",destination="continent")
+df$continent[is.na(df$continent)] <- "Other"
+
+```
+
+# Visualizations
+
+```{r viz, out.width="100%"}
+df_country <- df %>% group_by(country) %>% summarize(count=n()) %>% arrange(count) %>% tail(10)
+df_top_country <- df %>% filter(country %in% df_country$country)
+
+
+df_country %>% mutate(country = fct_reorder(country, count)) %>% 
+  ggplot(aes(country, log(count), fill=count))+
+  geom_col()+
+  coord_flip()+
+  labs(title="Top Countries for UFO Sightings")
+
+
+df_top_country %>% ggplot(aes(hour(date_time),country,fill=country))+
+  geom_density_ridges()+
+  scale_x_continuous(limits=c(0,24),breaks=c(0,4,8,12,16,20,24),labels=c("12am","4am","8am","noon","4pm","8pm","12am"))+
+  labs(title="UFO Sightings by Time of Day",x="Time",y="Country")+
+  theme(legend.position="none")
+
+
+df %>% ggplot(aes(as.factor(month(date_time))))+
+  geom_bar(fill="olivedrab3")+
+  facet_wrap(~continent, scales="free_y")+
+  labs(title="UFO Sightings by Month & Continent",subtitle="From November 1906 - April 2014",x="Month",y="Number of sightings")+
+  scale_x_discrete(breaks=c(1,3,5,7,9,11),labels=c("Jan","Mar","May","Jul","Sep","Nov"))+
+  theme(panel.background=element_rect(fill="gray16"),
+        plot.title=element_text(hjust=0.5, size=18, face="bold"),
+        plot.subtitle=element_text(hjust=0.5))
+              
+ggsave("ufo_sightings.png")
+```
+
