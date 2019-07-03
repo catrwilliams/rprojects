@@ -1,0 +1,178 @@
+---
+title: "Media Franchises"
+author: "Catherine Williams"
+date: "July 3, 2019"
+output:
+  html_document:
+    hightlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+# Project Description
+
+Tidy Tuesday has a weekly data project aimed at the R ecosystem. An emphasis is placed on understanding how to summarize and arrange data to make meaningful charts with ggplot2, tidyr, dplyr, and other tools in the tidyverse ecosystem.
+
+# Dataset
+Data came from [Wikipedia](https://en.wikipedia.org/wiki/List_of_highest-grossing_media_franchises). The data includes information such as franchise name, revenue generated, year created, and owners/creators of the franchise.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+setwd("~/../Google Drive/Data Analysis/Tidy Tuesday/07-02-19 - Media Franchises/")
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("tidyverse","visdat","extrafont","ggpubr","png")
+
+theme_set(theme_classic())
+```
+
+## Import Data
+
+```{r import}
+df <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-07-02/media_franchises.csv")
+```
+# Exploratory Data Analysis
+
+- There are 321 observations and 7 variables.
+- Revenue is shown in 'billions' so the numbers seem small.
+- Many of the variables are characters and appear to need cleaning.
+- There are no missing values.
+- 1996 brought in the most revenue.
+- Pokémon, Hello Kitty, Winnie the Pooh, Mickey Mouse & Friends, Star Wars, and Anpanman have earned the most revenue.
+- Merchandise, Licensing & Retail is the highest earning revenue category.
+
+## View Data
+
+```{r view}
+glimpse(df)
+head(df)
+summary(df)
+sapply(df, function(x) n_distinct(x)) %>% sort()
+
+df %>% count(revenue_category, sort=TRUE)
+df %>% count(original_media, sort=TRUE)
+```
+
+## Missing Values
+
+View missing values in more detail.
+
+```{r missing}
+#Visualize missing values
+vis_miss(df, sort_miss=TRUE)
+```
+
+## Data Cleaning
+
+Clean fields to make them easier to read/visualize.
+
+```{r wrangle}
+df <- df %>% mutate(original_media = case_when(original_media %in% "Book" ~ "Novel",
+                                               original_media %in% "Cartoon character" ~ "Cartoon",
+                                               original_media %in% "Visual novel" ~ "Comic book",
+                                               original_media %in% "Animated cartoon" ~ "Animated series",
+                                               TRUE ~ original_media),
+                    franchise = str_replace(franchise, "A Song of Ice and Fire \\/ ", ""),
+                    franchise = str_replace(franchise, "Wizarding World \\/ ", ""),
+                    franchise = str_replace(franchise, "Middle-earth \\/ ", ""),
+                    revenue_category = str_replace(revenue_category, ", Licensing & Retail", ""),
+                    revenue_category = str_replace(revenue_category, "\\/Entertainment", ""),
+                    revenue_category = str_replace(revenue_category, "\\/Games", ""),
+                    revenue_category = str_replace(revenue_category, " sales", ""),
+                    revenue_category = str_replace(revenue_category, "Comic or Manga", "Comic\\/Manga"))
+
+```
+
+## Visualizations
+
+```{r eda}
+df %>% ggplot(aes(year_created, revenue, fill=revenue_category))+
+  geom_col()+
+  scale_fill_viridis_d(option="E")+
+  labs(title="Franchise Revenue by Year", x="Year", y="Revenue (in billions)")
+
+df %>% filter(year_created > 1970) %>% 
+  ggplot(aes(year_created, revenue, fill=revenue_category))+
+  geom_col()+
+  scale_fill_viridis_d(option="E")+
+  labs(title="Franchise Revenue after 1970", x="Year", y="Revenue (in billions)")
+
+df_revenue <- df %>% group_by(franchise) %>% summarize(total_revenue = sum(revenue)) %>% arrange(desc(total_revenue)) %>% ungroup()
+
+df <- left_join(df,df_revenue)
+
+df %>% filter(year_created == 1996) %>% mutate(franchise = fct_reorder(franchise, total_revenue)) %>%
+  ggplot(aes(franchise, revenue, fill=revenue_category))+
+  geom_col()+
+  scale_fill_viridis_d(option="E")+
+  coord_flip()+
+  labs(title="Franchise Revenue in 1996", y="Revenue (in billions)")+
+  theme(axis.title.y = element_blank())
+
+df %>% filter(total_revenue > 50) %>% mutate(franchise = fct_reorder(franchise, total_revenue)) %>%
+  ggplot(aes(franchise, revenue, fill=revenue_category))+
+  geom_col()+
+  scale_fill_viridis_d(option="E")+
+  coord_flip()+
+  labs(title="Top Franchises' Revenue", y="Revenue (in billions)")+
+  theme(axis.title.y = element_blank())
+
+df_revenue <- df %>% group_by(original_media) %>% summarize(media_revenue = sum(revenue)) %>% arrange(desc(media_revenue)) %>% ungroup()
+
+df <- left_join(df,df_revenue)
+
+df %>% mutate(original_media = fct_reorder(original_media, media_revenue)) %>%
+  ggplot(aes(original_media, revenue, fill=revenue_category))+
+  geom_col()+
+  scale_fill_viridis_d(option="E")+
+  coord_flip()+
+  labs(title="Revenue by Original Media Type", x="Original Media", y="Revenue (in billions)")
+
+df_revenue <- df %>% group_by(revenue_category) %>% summarize(category_revenue = sum(revenue)) %>% arrange(desc(category_revenue)) %>% ungroup()
+
+df <- left_join(df,df_revenue)
+
+df %>% mutate(revenue_category = fct_reorder(revenue_category, category_revenue)) %>%
+  ggplot(aes(revenue_category, revenue, fill=original_media))+
+  geom_col()+
+  scale_fill_viridis_d(option="E")+
+  coord_flip()+
+  labs(title="Revenue by Category", x="Category", y="Revenue (in billions)")
+```
+
+# Final Visualization
+
+Image found at http://www.greeklibrary.org/wp-content/uploads/2019/05/books.jpg
+
+```{r viz, out.width="100%"}
+img <- readPNG("books.png")
+
+df %>% filter(original_media == "Novel") %>% mutate(franchise = fct_reorder(franchise, total_revenue)) %>%
+  ggplot(aes(franchise, revenue, fill=revenue_category))+
+  background_image(img)+
+  geom_col(color="gray", size=0.2)+
+  scale_fill_brewer(palette="Blues")+
+  scale_y_continuous(expand = c(0.01,0))+
+  coord_flip()+
+  labs(title="Franchised Novels' Revenue by Category", y="Revenue (in billions)", fill="Category")+
+  theme(plot.title = element_text(hjust=0.5, face="bold"),
+        text=element_text(family="Candara", size=13),
+        plot.background = element_blank(),
+        panel.background = element_blank(),
+        axis.title.y = element_blank(),
+        axis.text = element_text(face="bold"),
+        legend.background = element_blank(),
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10))
+
+ggsave("media-franchises.png")
+```
+
