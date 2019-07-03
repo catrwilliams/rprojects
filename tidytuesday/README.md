@@ -1,5 +1,8 @@
 # Tidy Tuesday Submissions
 
+- 7/3/19 - [Media Franchises](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Media-Franchises.Rmd)
+<img src="https://catrwilliams.github.io/images/media-franchises.png" width="325">
+
 - 6/26/19 - [UFO Sightings](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/UFO_Sightings.Rmd)
 <img src="https://catrwilliams.github.io/images/ufo-sightings.png" width="325">
 
