@@ -1,0 +1,182 @@
+---
+title: "Radial Visualization"
+author: "Catherine Williams"
+date: "July 6, 2019"
+output:
+  html_document:
+    hightlight: tango
+    number_sections: yes
+    theme: spacelab
+    toc: yes
+    toc_depth: 2
+    toc_float: yes
+---
+# Challenge Description
+
+This month, the challenge is to create and share a radial data visualization. Any circular view of data is welcome, but the data and scenario should lend itself well to this.
+
+# Dataset
+
+Data came from [Kaggle](https://www.kaggle.com/selfishgene/historical-hourly-weather-data#weather_description.csv) and includes historical hourly weather data for 36 different cities from 2012-2017. However, only Seattle data will be used in this project.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+setwd("~/../Google Drive/Data Analysis/SWD Challenges/07-2019/")
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("tidyverse","visdat","lubridate","packcircles","ggforce")
+```
+
+## Import Data
+
+```{r import}
+df <- read_csv("weather_description.csv")
+```
+
+# Data Wrangling
+
+- There are 45,253 observations.
+- Each city has its own column with a character description of the weather pattern
+- The first row is NA for all cities.
+
+## View Data
+
+```{r view}
+glimpse(df)
+head(df)
+
+levels(as.factor(df$Seattle))
+summary(df$datetime)
+```
+
+## Filter Data
+
+Data before December 2012 was removed in order to have an equal number of each month so that Winter will not show skewed data.
+
+```{r clean}
+df <- df %>% select(datetime,Seattle)
+df <- df %>% filter(datetime > "2012-11-30") 
+```
+
+## Missing Values
+
+There are no missing values.
+
+```{r missing}
+#Visualize missing values
+vis_miss(df, sort_miss=TRUE)
+```
+
+## Prepare Dataframe
+
+```{r wrangle}
+df <- df %>% transmute(month = month(datetime),
+                      season = case_when(month %in% c(12,1,2) ~ "Winter",
+                                       month %in% c(3,4,5) ~ "Spring",
+                                       month %in% c(6,7,8) ~ "Summer",
+                                       month %in% c(9,10,11) ~ "Fall"),
+                      weather = case_when(str_detect(Seattle, "rain|drizzle") ~ "rain",
+                                          str_detect(Seattle, "mist|fog") ~ "fog",
+                                          str_detect(Seattle, "clear") ~ "clear",
+                                          str_detect(Seattle, "squalls") ~ "squalls",
+                                          str_detect(Seattle, "cloud") ~ "clouds",
+                                          str_detect(Seattle, "smoke|haze") ~ "haze",
+                                          str_detect(Seattle, "snow") ~ "snow",
+                                          str_detect(Seattle, "thunderstorm") ~ "thunder"))
+
+# aster chart
+df_aster <- df %>% group_by(weather) %>% summarize(count=n()) %>% arrange(count) %>% ungroup()
+df_aster <- df_aster %>% mutate_at(vars(weather), as.factor)
+df_aster$weather <- fct_reorder(df_aster$weather, df_aster$count)
+df_aster <- df_aster %>% filter(count > 20)
+
+# circle chart
+df_circle <- df %>% group_by(season,weather) %>% summarize(count=n()) %>% arrange(count) %>% ungroup()
+df_circle <- df_circle %>% mutate_if(is.character, as.factor)
+df_circle <- df_circle %>% filter(count > 20)
+```
+
+# Visualizations
+## Aster Chart
+
+```{r aster}
+df_aster %>% ggplot(aes(weather,sqrt(count),fill=weather))+
+      geom_col()+
+      geom_text(aes(y=50,label=weather))+
+      coord_polar()+
+      ylim(-10,125)+
+      labs(title="Seattle Weather Occurrences",subtitle="Measured from 2012 - 2017",fill="Weather Type")+
+      theme_minimal()+
+      theme(axis.title = element_blank(),
+            axis.text = element_blank(),
+            plot.title = element_text(hjust=0.5),
+            plot.subtitle = element_text(hjust=0.5),
+            legend.position = "none")
+```
+
+## Circle Packed Chart
+
+```{r}
+set.seed(333)
+df_packs <- df_circle$count %>% circleRepelLayout() %>% .$layout
+
+df_packs <- bind_cols(df_circle, df_packs) %>% select(-count)
+
+# set colors
+colors <- c("#BFD1E5","#8CC7A1","#C1666B","#D4B483") %>% set_names(nm = c("Winter","Spring","Summer","Fall"))
+
+# main circle plot
+p <- df_packs %>% ggplot() +
+  geom_circle(aes(x0=x, y0=y, r=radius, fill=season, color=season), size=0.1, show.legend=FALSE) +
+  geom_text(aes(x=x, y=y, label=weather, size=radius*0.5), show.legend=FALSE) +
+  scale_fill_manual(values=colors) +
+  scale_color_manual(values=colors) +
+  coord_fixed() +
+  ggtitle("Seattle Weather Occurrences")+
+  theme_void() +
+  theme(text = element_text(family="courier"),
+        plot.title = element_text(face="bold", hjust=0.5, size=14),
+        plot.background = element_rect(fill="snow", color="black"))
+
+# make legend maually
+legend <-
+  tibble(y=rep(1, each=4), x=rep(1:4, times=1), fill=colors %>% names(), r=0.1) %>%
+  ggplot() +
+  geom_text(aes(x=x, y=y-.2, label=fill), size=2.25, vjust=1, family="courier", fontface="bold") +
+  geom_circle(aes(x0=x, y0=y, fill=fill, color=fill, r=r), show.legend=FALSE) +
+  scale_fill_manual(values=colors) +
+  scale_colour_manual(values=colors) +
+  coord_fixed() +
+  theme_void() +
+  lims(x=c(.5,6), y=c(0.5, 2.3))
+
+leg_text <- tibble(x=0.16, y=0.17, label="Season") %>% 
+  ggplot()+
+  geom_text(aes(x=x, y=y, label=label), family="courier", fontface="bold", size=3.75, show.legend=FALSE)+
+  coord_fixed()+
+  lims(x=c(-4,5), y=c(-1, 1))+
+  theme_void()
+
+# combine plot with legend
+p + annotation_custom(
+      grob = ggplotGrob(legend),
+      xmin = -190,
+      xmax = -40,
+      ymin = -125,
+      ymax = -75) +
+    annotation_custom(
+      grob = ggplotGrob(leg_text),
+      xmin = -165,
+      xmax = -100,
+      ymin = -110,
+      ymax = -90)
+
+# save final plot
+ggsave("seattle-weather.png", width=6.1)
+```
