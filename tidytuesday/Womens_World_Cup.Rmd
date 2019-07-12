@@ -161,7 +161,7 @@ df_games %>% mutate(country = fct_reorder(country,net)) %>%
     coord_flip()+
     scale_fill_manual(name = "net < 0", values = setNames(c("#D6000A","#F08C01"), c(T,F)))+
     scale_y_continuous(expand=c(0,0), limits=c(-37,37), breaks=c(-30,-20,-10,0,10,20,30))+
-    labs(title="Women's World Cup", subtitle="Net Wins Per Country", y="NET WINS / LOSSES", fill="Net Game Status")+
+    labs(title="Women's World Cup - Net Wins Per Country", subtitle="From 1991 - 2019", y="NET WINS / LOSSES", fill="Net Game Status")+
     theme(plot.background = element_rect(fill="#23207C"),
           panel.background = element_rect(fill="#23207C"),
           legend.position="none",
@@ -171,8 +171,9 @@ df_games %>% mutate(country = fct_reorder(country,net)) %>%
           axis.ticks = element_line(color="white"),
           axis.title = element_text(family="OpenSans", face="bold", color="white"),
           plot.title = element_text(hjust=0.5, family="Elegance", face="bold", size=16, color="#00B5ED"),
-          plot.subtitle = element_text(hjust=0.5, family="Elegance", face="bold", size=14, color="#FDDB00"),
-          axis.title.y = element_blank())
+          plot.subtitle = element_text(hjust=0.5, family="Elegance", face="bold", size=13, color="#FDDB00"),
+          axis.title.y = element_blank(),
+          axis.title.x = element_text(size=8))
 
 ggsave("womens-world-cup.png")
 ```
