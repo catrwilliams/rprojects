@@ -1,5 +1,8 @@
 # Tidy Tuesday Submissions
 
+- 7/12/19 - [Women's World Cup](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Womens_World_Cup.Rmd)
+<img src="https://catrwilliams.github.io/images/womens-world-cup.png" width="325">
+
 - 7/3/19 - [Media Franchises](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Media-Franchises.Rmd)
 <img src="https://catrwilliams.github.io/images/media-franchises.png" width="325">
 
