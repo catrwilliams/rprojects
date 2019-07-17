@@ -1,6 +1,6 @@
 # Tidy Tuesday Submissions
 
-- 7/16/19 - [R4DS Community Stats](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/R4DS Community Stats.Rmd)
+- 7/16/19 - [R4DS Community Stats](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/R4DS_Community_Stats.Rmd)
 <img src="https://catrwilliams.github.io/images/r4ds-community-stats.png" width="325">
 
 - 7/12/19 - [Women's World Cup](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Womens_World_Cup.Rmd)
