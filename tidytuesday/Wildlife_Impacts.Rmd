@@ -1,0 +1,196 @@
+---
+title: "Wildlife Impacts"
+author: "Catherine Williams"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_fragment:
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+---
+
+# Project Description
+
+Tidy Tuesday has a weekly data project aimed at the R ecosystem. An emphasis is placed on understanding how to summarize and arrange data to make meaningful charts with ggplot2, tidyr, dplyr, and other tools in the tidyverse ecosystem.
+
+# Dataset
+Data came from [FAA](https://wildlife.faa.gov/). The data consists of voluntarily reported airplane wildlife strikes since 1990. The data was pre-filtered to include only the major airlines in the USA: American Airlines, Delta, Southwest, and United. The information obtained may include date, time, location, animal species, type of damage, weather conditions, airplane information, and repair costs.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+
+directory <- "07-23-19 - Wildlife Impacts"
+
+if(!getwd() == paste0("C:/Users/Cat/Google Drive/Data Analysis/Tidy Tuesday/",directory)) {
+  setwd(paste0("~/Tidy Tuesday/",directory))
+}
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library}
+if (!require("ggradar")) devtools::install_github("ricardo-bion/ggradar", dependencies = TRUE)
+
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("data.table","tidyverse","visdat","lubridate","modeest","ggradar","scales")
+
+theme_set(theme_classic())
+```
+
+## Import Data
+
+```{r import}
+df <- fread("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-07-23/wildlife_impacts.csv", stringsAsFactors=TRUE)
+
+#remove duplicate rows
+df <- df %>% distinct()
+```
+
+# Data Wrangling & Analysis
+
+- There are 56,449 observations and 21 variables.
+
+## View Data
+
+```{r view}
+glimpse(df)
+head(df)
+df %>% mutate_if(is.character, as.factor) %>% summary()
+sapply(df, function(x) n_distinct(x)) %>% sort()
+```
+
+## Missing Values
+
+View missing values in more detail.
+
+```{r missing}
+#Visualize missing values
+vis_miss(df, sort_miss=TRUE, warn_large_data = FALSE)
+
+#see count of missing values
+na_values <- function(df){
+  na <- colSums(is.na(df)) %>% sort(decreasing=TRUE)
+  na[na>0]
+}
+
+na_values(df)
+```
+
+## Data Wrangling
+
+- Dropped cost_repairs_infl_adj since the column is almost entirely missing.
+- Dropped incident_month and incident_year since the information is contained in incident_date field.
+- Cleaned up time by cross referencing to time_of_day and converting all times into military time.
+- Merged date and time into a single column.
+
+```{r wrangle}
+#remove repair costs since there are too many missing values
+df <- df %>% select(-cost_repairs_infl_adj,-incident_month,-incident_year)
+
+#mutate date and time columns to join into a single column
+df <- df %>% mutate(time = str_replace(time, "^\\d{1,2}$", paste0(time,"00")),
+                    time = as.double(time),
+                    time = case_when(time_of_day == "Night" & time < 1700 ~ time+1200,
+                                     time_of_day == "Dusk" & time < 1200 ~ time+1200,
+                                     is.na(time) ~ 0,
+                                     TRUE ~ time),
+                    time = str_pad(time, 4, side="left", pad="0"),
+                    time = if_else(time_of_day == "Night" & time > 2400, 
+                                   str_pad(time, 6, side="left", pad="0"), 
+                                   str_pad(time, 6, side="right", pad="0")),
+                    incident_date = str_sub(incident_date,1,10),
+                    datetime = paste(incident_date,time),
+                    #this will convert to date/time
+                    datetime = as_datetime(datetime), 
+                    #need to put it back to character in order to make proper NA replacement 
+                    #it picks a random time instead of inserting 0s if this is not done
+                    datetime = as.character(datetime), 
+                    #replace NA values generated from illegal time formats
+                    datetime = replace(datetime,is.na(datetime),incident_date[is.na(datetime)]),
+                    #convert back to date/time
+                    datetime = as_datetime(datetime)) %>%
+  select(-time,-incident_date)
+
+#complete time_of_day based on time of year, day, and location
+df <- df %>% mutate(month = month(datetime),
+                    hour = hour(datetime)) %>% 
+  group_by(month,hour,state) %>% 
+  mutate(time_of_day = replace_na(time_of_day, mfv1(time_of_day, na.rm=T))) %>% 
+  ungroup()
+
+na_values(df) #there are still 151 missing time_of_day values
+
+#fill in values with educated guesses based on time of day
+df <- df %>% mutate(time_of_day = as.character(time_of_day),
+                    time_of_day = case_when(is.na(time_of_day) & hour > 5 & hour < 7 ~ "Dawn",
+                                            is.na(time_of_day) & hour > 17 & hour < 19 ~ "Dusk",
+                                            is.na(time_of_day) & hour >= 7 & hour <= 17 ~ "Day",
+                                            is.na(time_of_day) & hour >=19 | hour <=5 ~ "Night",
+                                            TRUE ~ time_of_day))
+na_values(df)
+
+#make airport names more readable
+df <- df %>% mutate(airport = str_replace_all(airport," ARPT| INTL",""),
+                    airport = str_to_title(airport) %>% as.factor())
+
+#clean phase_of_flt
+df <- df %>% mutate(phase_of_flt = str_to_lower(phase_of_flt),
+                    phase_of_flt = replace_na(phase_of_flt,"unknown"),
+                    phase_of_flt = str_replace(phase_of_flt, "local", "unknown"),
+                    phase_of_flt = as.factor(phase_of_flt),
+                    phase_of_flt = fct_relevel(phase_of_flt, c("parked","taxi","take-off run","departure","climb","en route","descent","approach","landing roll","arrival","unknown")))
+
+summary(as.factor(df$phase_of_flt))
+```
+
+# Visualizations
+
+The first three visualizations are misleading because there is no information on number of total flights so per capita amounts cannot be established.
+
+The [FAA Color Scheme](https://www.color-hex.com/color-palette/10305) was used for these visualizations.
+
+```{r viz, out.width="100%"}
+#this is misrepresenting the data because there are more day and night hours in a day 
+df %>% ggplot(aes(time_of_day))+
+  geom_bar(fill="#0f4d92")+
+  labs(title="What part of the day do most bird strikes happen?")
+
+#this is misrepresenting the data because some times are more popular to fly than others
+df %>% filter(hour != 0) %>% 
+  ggplot(aes(hour, fill=time_of_day))+
+  geom_bar()+
+  scale_fill_manual(values=c("#eedd82","#0f4d92","#b8860b","#008000"))+
+  labs(title="What time of day do most bird strikes happen?")
+
+#this could be misrepresenting the data because some airports are busier than others
+df %>% filter(airport_id != "ZZZZ") %>% count(airport) %>% filter(n > 700) %>% mutate(airport = fct_reorder(airport,n)) %>%
+  ggplot(aes(airport, n))+
+  geom_col(fill="#0f4d92")+
+  coord_flip()+
+  labs(title="Which airport has the most bird strikes?")
+
+#final visualization
+df_flt_phase <- df %>% filter(phase_of_flt != "unknown") %>% count(phase_of_flt)
+
+df_flt_phase <- df_flt_phase %>% mutate_at(vars(n), rescale)
+
+df_flt_phase %>% spread(phase_of_flt,n) %>% 
+  ggradar(axis.label.size = 4,
+          background.circle.colour = "#ffffff",
+          values.radar = c("","",""),
+          gridline.min.colour = "#b8860b",
+          gridline.mid.colour = "#eedd82",
+          gridline.max.colour = "#b8860b",
+          axis.line.colour = "#008000",
+          group.point.size = 4,
+          group.colours = "#0f4d92",
+          plot.title = "When is an airplane most likely to strike a bird?")+
+  labs(caption = "Data: FAA Wildlife Strike Database | Graphic: Cat Williams @catrwilliams")+
+  theme(legend.position = "none",
+        plot.title = element_text(size=17, hjust=0.5, face="bold"),
+        plot.caption = element_text(size=6))
+
+ggsave("wildlife-impacts.png")
+```
