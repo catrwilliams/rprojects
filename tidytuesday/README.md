@@ -1,5 +1,8 @@
 # Tidy Tuesday Submissions
 
+- 7/24/19 - [Wildlife Impacts](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Wildlife_Impacts.Rmd)
+<img src="https://catrwilliams.github.io/images/wildlife-impacts.png" width="325">
+
 - 7/16/19 - [R4DS Community Stats](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/R4DS_Community_Stats.Rmd)
 <img src="https://catrwilliams.github.io/images/r4ds-community-stats.png" width="325">
 
