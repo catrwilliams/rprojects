@@ -1,5 +1,8 @@
 # Tidy Tuesday Submissions
 
+- 8/5/19 - [Video Games](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Video_Games.Rmd)
+<img src="https://catrwilliams.github.io/images/video-games.png" width="325">
+
 - 7/24/19 - [Wildlife Impacts](https://github.com/catrwilliams/rprojects/blob/master/tidytuesday/Wildlife_Impacts.Rmd)
 <img src="https://catrwilliams.github.io/images/wildlife-impacts.png" width="325">
 
