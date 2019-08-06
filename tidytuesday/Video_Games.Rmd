@@ -231,3 +231,14 @@ df %>% ggplot()+
 
 ggsave("video-games.png")
 ```
+
+# Conclusions
+
+I do not have specific knowledge of most video games, however, I have heard the names of many of the highest grossing video games in passing. They also appear to be of multiple genres (ie. war, mystery, trivia) which comes as a surprise to me. I would not have placed a trivia game in the top 20 highest grossing video games.
+
+Another surprise to me is that there is no obvious relationship between average time played and the price of the game. I would have expected more expensive games to be played more as it is a larger investment and logically higher prices tend to equate to better things. What these charts do show is that lower priced games are slightly more popular, due to the concentration of the data points closer to 0.
+
+As for top video game publishers, it appears that Magix Software is doing much better than the other publishers. Big Fish Games, Ubisoft, Koei Tecmo Games, and Slitherine are in a slightly higher bracket than the other top performers. After that, revenue numbers seem to decrease gradually. I also wonder if the top publishers correlate to the highest grossing games. Further analysis would need to be done to determine this.
+
+Lastly, having more overall players for a particular game does not encourage more playtime. At first thought it would seem that more popular games would have more playtime. Based on the data, however, one may infer that because there are more people involved (perhaps only occasional players) with more popular games, it skews the average rankings.
+
