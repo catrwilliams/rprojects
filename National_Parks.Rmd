@@ -1,0 +1,244 @@
+---
+title: "Untitled"
+author: "Catherine Williams"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output: 
+  html_fragment:
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+---
+
+# Project Description
+
+Tidy Tuesday has a weekly data project aimed at the R ecosystem. An emphasis is placed on understanding how to summarize and arrange data to make meaningful charts with ggplot2, tidyr, dplyr, and other tools in the tidyverse ecosystem.
+
+# Dataset
+Data came from [Data.world](https://data.world/inform8n/us-national-parks-visitation-1904-2016-with-boundaries). The data includes park name, location, and number of visitors.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+
+directory <- "09-17-19 - National Parks"
+
+if(!getwd() == paste0("C:/Users/Cat/Google Drive/Data Analysis/Tidy Tuesday/",directory)) {
+  setwd(paste0("~/Tidy Tuesday/",directory))
+  }
+```
+
+# Setup
+
+## Load Libraries
+
+```{r library}
+#devtools::install_github("hrbrmstr/albersusa")
+if (!require("pacman")) install.packages("pacman")
+#pacman::p_load("tidyverse","visdat","leaflet","albersusa","usmap","sf","ggthemes")
+pacman::p_load("tidyverse","visdat","rgdal","maptools","ggthemes","leaflet","FRK")
+
+theme_set(theme_classic())
+```
+
+## Import Data
+
+```{r import}
+df_parks <- read_csv("https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2019/2019-09-17/national_parks.csv")
+```
+
+# Data Wrangling & Analysis
+
+- There are 21,560 observations and 12 variables.
+
+## View Data
+
+```{r view}
+glimpse(df_parks)
+head(df_parks)
+summary(df_parks)
+sapply(df_parks, function(x) n_distinct(x)) %>% sort()
+
+unique(df_parks$unit_type)
+```
+
+## Filter Data
+
+I only want to analyze National Parks and do not wish to include Recreation Areas, Historical Parks, Battlefields, etc. so I will filter the data to only include "unit_type" for National Park.
+
+This drops the number of observations down to 4,743.
+
+```{r}
+df_parks <- df_parks %>% filter(unit_type == "National Park")
+```
+
+## Missing Values
+
+View missing values in more detail.
+
+```{r missing}
+#Visualize missing values
+vis_miss(df_parks, sort_miss=TRUE)
+
+#see count of missing values
+na_values <- function(df_parks){
+  na <- colSums(is.na(df_parks)) %>% sort(decreasing=TRUE)
+  na[na>0]
+}
+
+na_values(df_parks)
+```
+
+## Data Wrangling
+
+- Removed metadata column since it will not be used
+- Filled out parkname for missing values using the unit_name column. It is just the unit_name minus the words "National Park" at the end. This will be helpful to have for visualizations.
+
+```{r wrangle}
+df_parks <- df_parks %>% select(-metadata)
+
+df_parks$parkname <- if_else(is.na(df_parks$parkname), str_extract(df_parks$unit_name, ".+(?= National Park)"), df_parks$parkname)
+
+# this separates Denali National Park and Denali National Preserve. Only one is needed. the numbers are identical.
+df_visitors_total <- df_parks %>% filter(year == "Total") %>% mutate(parkname = fct_reorder(parkname, visitors)) %>% arrange(visitors)
+
+df_visitors_total <- df_visitors_total[!duplicated(df_visitors_total$parkname),]
+
+# this duplicates the vales for Denali because it is adding National Park and National Preserve together
+df_visitors_annual <- df_parks %>% filter(year != "Total") %>% group_by(parkname) %>% summarize(total_visitors = sum(visitors)) %>% ungroup() %>% 
+  mutate(parkname = fct_reorder(parkname, total_visitors),
+         total_visitors = if_else(parkname == "Denali", total_visitors/2, total_visitors)) %>% arrange(total_visitors)
+
+df_centroids <- read_csv('National_Park_Service__Park_Unit_Centroids.csv') %>% rename_all(tolower)
+```
+
+# Visualizations
+
+```{r viz, out.width="100%"}
+
+tmp_dl <- tempfile()
+download.file("ftp://ftp2.census.gov/geo/tiger/TIGER2019/STATE/tl_2019_us_state.zip", tmp_dl)
+#download.file("https://www2.census.gov/geo/tiger/GENZ2018/shp/cb_2018_us_state_20m.zip", tmp_dl)
+
+unzip(tmp_dl, exdir=tempdir())
+states <- readOGR(tempdir(), "tl_2019_us_state")
+#states <- readOGR(tempdir(), "cb_2018_us_state_20m")
+
+
+##start here. points are not displaying right because they are in a different gps format. fix that. then see about leaflet?
+
+remove.territories = function(.df) {
+  subset(.df,
+           .df$id != "MP" &
+           .df$id != "GU" &
+           .df$id != "PR")
+}
+
+us_aea <- spTransform(states, CRS("+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +a=6370997 +b=6370997 +units=m +no_defs"))
+us_aea@data$id <- rownames(us_aea@data)
+
+alaska <- us_aea[us_aea$STUSPS=="AK",]
+alaska <- elide(alaska, rotate=-30)
+alaska <- elide(alaska, scale=max(apply(bbox(alaska), 1, diff)) / 2.3)
+alaska <- elide(alaska, shift=c(-2100000, -2500000))
+#alaska <- elide(alaska, shift=c(-119.8522102, 20.2456656))
+proj4string(alaska) <- proj4string(us_aea)
+alaska <- spTransform(alaska, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+hawaii <- us_aea[us_aea$STUSPS=="HI",]
+hawaii <- elide(hawaii, rotate=-35)
+hawaii <- elide(hawaii, shift=c(5500000, -1700000))
+#hawaii <- elide(hawaii, shift=c(-47.3030715, 14.4844167))
+proj4string(hawaii) <- proj4string(us_aea)
+hawaii <- spTransform(hawaii, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+samoa <- us_aea[us_aea$STUSPS=="AS",]
+samoa <- elide(samoa, rotate=-45)
+samoa <- elide(samoa, scale=max(apply(bbox(samoa), 1, diff)) / 0.7)
+samoa <- elide(samoa, shift=c(-2500000, -1500000))
+#samoa <- elide(samoa, shift=c(-125.6602714, 28.0993555))
+proj4string(samoa) <- proj4string(us_aea)
+samoa <- spTransform(samoa, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+virgin <- us_aea[us_aea$STUSPS=="VI",]
+virgin <- elide(virgin, shift=c(-1300000, 0))
+#virgin <- elide(virgin, shift=c(-116.3394088, 43.8192901))
+proj4string(virgin) <- proj4string(us_aea)
+virgin <- spTransform(virgin, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+us_aea <- spTransform(us_aea, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+us_aea <- us_aea[!us_aea$STUSPS %in% c("AK", "HI", "AS", "VI"),]
+us_aea <- rbind(us_aea, alaska, hawaii, samoa, virgin)
+
+us50 <- fortify(us_aea, region="STUSPS")
+us50 = remove.territories(us50)
+
+df_points <- df_centroids %>% inner_join(df_visitors_annual)
+df_points$id <- rownames(df_points)
+
+### start here - trying t get the points to move the same way the boxes did
+ogrDrivers()
+
+writeOGR(df_points, "towns.kml", "towns", "KML")
+points <- writeOGR(",", df_points)
+
+points <- matrix(c(df_points$x,df_points$y), nrow=57, ncol=2)
+points <- as.matrix(df_points[,1:2])
+
+points <- Polygon(points, hole=is.logical(FALSE))
+
+points_list <- list(points@coords)
+
+points <- SpatialPolygons(points_list,proj4string=CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+
+points <- SpatialPolygonsDataFrame(df_points,"id",c("x","y"),CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+points_ak <- points[points$state=="AK",]
+points_ak <- elide(points_ak, rotate=-30)
+points_ak <- elide(points_ak, scale=max(apply(bbox(points_ak), 1, diff)) / 2.3)
+points_ak <- elide(points_ak, shift=c(-2100000, -2500000))
+#alaska <- elide(alaska, shift=c(-119.8522102, 20.2456656))
+proj4string(points_ak) <- proj4string(points)
+points_ak <- spTransform(points_ak, CRS("+proj=longlat +datum=WGS84 +no_defs +ellps=WGS84 +towgs84=0,0,0"))
+
+#plot
+ggplot() +
+  geom_map(data=us50, map=us50, aes(long, lat, map_id=id, group=group), fill="white", color="dark grey", size=0.15)+
+  #geom_polygon(data=us_aea2, aes(INTPTLON, INTPTLAT, group=DIVISION), fill="white", color="dark grey") +
+  geom_point(data=points,aes(x,y,size = total_visitors), color="#1f4045")+
+  theme_map()
+```
+
+
+
+```{r}
+world <- map_data("world")
+
+points <- df_centroids %>% inner_join(df_visitors_annual)
+
+df_centroids %>% inner_join(df_visitors_annual) %>% 
+  ggplot(aes(x,y))+
+  geom_polygon(data=world, aes(long, lat, group=group), fill="white", color="#916451")+
+  geom_point(aes(size = total_visitors), color="#1f4045")+
+  coord_map("polyconic", xlim=c(-170,-60),ylim=c(15,75))
+
+#################################################################
+us_laea <- usa_sf("laea") %>% rename(state = iso_3166_2)
+
+albers <- inner_join(us_laea, df_centroids) 
+
+p <- albers %>% left_join(df_visitors_annual) %>%
+  ggplot()+
+  geom_sf(fill="white",color="red")+
+  #geom_point(aes(x,y,size = total_visitors), color="#1f4045")+
+  coord_sf(datum = NA)
+
+p + geom_point(data=points,aes(x,y,size = total_visitors), color="#1f4045")
+
+######################
+library(sp)
+us_aea2 <- spTransform(us_laea, proj4string(us))
+map <- leaflet(us_aea2) 
+
+#ggsave("national_parks.png")
+```
+

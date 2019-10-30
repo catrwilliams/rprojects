@@ -1,0 +1,673 @@
+---
+title: "House Prices"
+author: "Catherine Williams"
+date: "`r format(Sys.time(), '%B %d, %Y')`"
+output:
+  html_fragment:
+    number_sections: yes
+    toc: yes
+    toc_depth: 2
+---
+
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+
+directory <- "C:/Users/Cat/Google Drive/Data Analysis/Kaggle Competitions/House Prices - Advanced Regression"
+
+if(!getwd() == directory) {
+  setwd(directory)
+}
+```
+
+## Load Libraries
+```{r library}
+if (!require("pacman")) install.packages("pacman")
+pacman::p_load("tidyverse","modeest","zoo","corrplot","reshape2","naniar","qqplotr","fastDummies","FNN","Boruta","caret","performance","caretEnsemble","doParallel")
+
+theme_set(theme_classic())
+```
+
+Import the data that Kaggle provided.
+
+```{r import, message=FALSE}
+#import data frames
+df_train <- read_csv("train.csv")
+df_test <- read_csv("test.csv")
+```
+# Exploratory Data Analysis
+
+Review data to understand it.
+
+## View Data
+```{r review}
+#review data frame
+df_train %>% glimpse()
+df_test %>% glimpse()
+
+df_train$SalePrice %>% summary()
+df_train %>% count(Neighborhood, sort=TRUE)
+```
+
+Combine data for cleaning so that the same manipulations are applied to everything.
+
+```{r combine}
+#combine data for cleaning and viewing
+df <- bind_rows(df_train, df_test)
+
+df %>% glimpse()
+
+#view unique values
+sapply(df, function(x) n_distinct(x)) %>% sort()
+```
+
+## Missing Values
+
+```{r na, warning=FALSE}
+#Visualize missing values
+gg_miss_var(df[,colSums(is.na(df)) > 0], show_pct=TRUE) + labs(title="Missing Values")
+
+#see count of missing values
+na_values <- function(df){
+  na <- colSums(is.na(df)) %>% sort(decreasing=TRUE)
+  na[na>0]
+}
+
+na_values(df)
+```
+
+## Correlations
+
+Find correlated variables
+
+```{r corr}
+corr_simple <- function(data=df,drop="SalePrice",sig=0.5){
+  #convert data to numeric in order to run correlations
+  df_cor <- data %>% mutate_if(is.character, as.factor) %>% select(-drop)
+  df_cor <- df_cor %>% mutate_if(is.factor, as.numeric)
+
+  #run a correlation and since there are so many variables, drop the insignificant ones
+  corr <- cor(df_cor)
+  corr[lower.tri(corr,diag=TRUE)] <- NA  #Prepare to drop duplicates and correlations of 1
+  corr[corr == 1] <- NA #drop perfect correlations
+  corr <- as.data.frame(as.table(corr)) #Turn into a 3-column table
+  corr <- na.omit(corr) #remove the NA values from above
+  corr <- subset(corr, abs(Freq) > sig) #select significant values
+  corr <- corr[order(-abs(corr$Freq)),] #Sort by highest correlation
+  print(corr)
+
+  #turn corr back into matrix in order to plot with corrplot
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  #plot correlations visually
+  corrplot::corrplot(mtx_corr, is.corr=FALSE, tl.col="black", na.label=" ")
+}
+
+corr_simple()
+```
+
+# Data Wrangling
+
+## Fix Missing Values
+
+Replace missing values based on appropriate logic.
+
+PoolQC, MiscFeature, Alley and Fence have a lot of missing values, however, in this case NA means the features do not exist. These will be changed to character values of NA.
+
+```{r}
+#the following features do not necessarily exist. These can be changed to "NA"
+df$MiscFeature[is.na(df$MiscFeature)] <- "NA"
+df$Alley[is.na(df$Alley)] <- "NA"
+df$Fence[is.na(df$Fence)] <- "NA"
+df$GarageType[is.na(df$GarageType)] <- "NA"
+df$MasVnrArea[is.na(df$MasVnrArea)] <- 0
+
+#the following features do not necessarily exist but are dependent on values in other columns. They will be changed to "NA" based on other column values
+df$PoolQC[df$PoolArea == 0] <- "NA"
+df$FireplaceQu[df$Fireplaces == 0] <- "NA"
+df$GarageYrBlt[df$GarageType == "NA"] <- "NA"
+df$GarageFinish[df$GarageType == "NA"] <- "NA"
+df$GarageQual[df$GarageType == "NA"] <- "NA"
+df$GarageCond[df$GarageType == "NA"] <- "NA"
+df$MasVnrType[df$MasVnrArea == 0] <- "None"
+
+#there are a lot of basement fields so we want to make sure that this is handled properly
+#first make a basement variable for the missing variables to depend on, based on other variables. 
+#Since none of the below variables by itself can definitively say whether a basement exists or not, we see where the sums of all of them equal 0 and decide then that a basement does not exist
+df <-  df %>% mutate(Bsmt = if_else(TotalBsmtSF + BsmtFullBath + BsmtHalfBath + BsmtUnfSF + BsmtFinSF1 + BsmtFinSF2 >= 1, TRUE, FALSE))
+
+df$Bsmt[df$Bsmt %in% NA] <- FALSE
+
+df$BsmtCond[df$Bsmt == FALSE] <- "NA"
+df$BsmtExposure[df$Bsmt == FALSE] <- "NA"
+df$BsmtQual[df$Bsmt == FALSE] <- "NA"
+df$BsmtFinType2[df$Bsmt == FALSE] <- "NA"
+df$BsmtFinType1[df$Bsmt == FALSE] <- "NA"
+df$BsmtFullBath[df$Bsmt == FALSE] <- 0
+df$BsmtHalfBath[df$Bsmt == FALSE] <- 0
+df$BsmtFinSF1[df$Bsmt == FALSE] <- 0
+df$BsmtFinSF2[df$Bsmt == FALSE] <- 0
+df$BsmtUnfSF[df$Bsmt == FALSE] <- 0
+df$TotalBsmtSF[df$Bsmt == FALSE] <- 0
+
+df <- df %>% mutate(BsmtCond = replace_na(BsmtCond, mfv(BsmtCond, na.rm=T)),
+                    BsmtExposure = replace_na(BsmtExposure, mfv(BsmtExposure, na.rm=T)),
+                    BsmtQual = replace_na(BsmtQual, mfv(BsmtQual, na.rm=T)),
+                    BsmtFinType2 = replace_na(BsmtFinType2, mfv(BsmtFinType2, na.rm=T)))
+
+#these features should be determined by central tendency statistics, in this case- mean and mode
+df <- df %>% mutate(GarageArea = na.aggregate(GarageArea,GarageType),
+                    GarageCars = na.aggregate(GarageCars,GarageType) %>% round(),
+                    GarageQual = replace_na(GarageQual, mfv(GarageQual, na.rm=T)),
+                    GarageCond = replace_na(GarageCond, mfv(GarageCond, na.rm=T)),
+                    PoolQC = replace_na(PoolQC, mfv(PoolQC, na.rm=T)),
+                    Utilities = replace_na(Utilities, mfv(Utilities, na.rm=T)),
+                    Exterior1st = replace_na(Exterior1st, mfv1(Exterior1st, na.rm=T)),
+                    Exterior2nd = replace_na(Exterior2nd, mfv1(Exterior2nd, na.rm=T)))
+
+#find mode based on a logical group
+df <-df %>% group_by(YearRemodAdd) %>% mutate(GarageYrBlt = replace_na(GarageYrBlt, mfv1(GarageYrBlt, na.rm=T))) %>% ungroup()
+
+df <-df %>% group_by(GarageYrBlt) %>% mutate(GarageFinish = replace_na(GarageFinish, mfv1(GarageFinish, na.rm=T))) %>% ungroup()
+
+df <-df %>% group_by(OverallQual) %>% mutate(KitchenQual = replace_na(KitchenQual, mfv(KitchenQual, na.rm=T))) %>% ungroup()
+
+df <- df %>% group_by(OverallCond)%>% mutate(Functional = replace_na(Functional, mfv(Functional, na.rm=T))) %>% ungroup()
+
+df <- df %>% group_by(Neighborhood)%>% mutate(MSZoning = replace_na(MSZoning, mfv(MSZoning, na.rm=T)),
+                                              MasVnrType = replace_na(MasVnrType, mfv(MasVnrType, na.rm=T)),
+                                              LotFrontage = na.aggregate(LotFrontage)) %>% ungroup()
+
+df <- df %>% group_by(YearBuilt)%>% mutate(Electrical = replace_na(Electrical, mfv1(Electrical, na.rm=T))) %>% ungroup()
+
+df <- df %>% group_by(SaleCondition)%>% mutate(SaleType = replace_na(SaleType, mfv(SaleType, na.rm=T))) %>% ungroup()
+
+#check for final na_values
+na_values(df)
+```
+
+## Strings
+
+Correct issues with strings.
+
+```{r strings}
+#fix strings that do not match the legend and/or have typos
+df <- df %>% mutate(Exterior2nd = case_when(Exterior2nd %in% "Brk Cmn" ~ "BrkComm",
+                                            Exterior2nd %in% "Wd Shng" ~ "WdShing",
+                                            Exterior2nd %in% "CmentBd" ~ "CemntBd",
+                                            TRUE ~ Exterior2nd)) 
+```
+
+## Data Types
+
+Change variable types to more appropriate types.
+
+```{r clean, message=FALSE, warning=FALSE}
+#change variable types & feature engineering
+df %>% glimpse()
+
+df <- df %>% mutate_if(is.character, as.factor)
+
+df <- df %>% mutate(Id = as.factor(Id),
+                    MSSubClass = as.factor(MSSubClass),
+                    MoSold = as.factor(MoSold),
+                    CentralAir = if_else(CentralAir=="Y",TRUE,FALSE) %>% as.logical(),
+                    SsnPorch = `3SsnPorch`,
+                    TotalSF = `1stFlrSF`+`2ndFlrSF`+BsmtFinSF1+BsmtFinSF2,
+                    NumBath = FullBath+(HalfBath*0.5)+BsmtFullBath+(BsmtHalfBath*0.5),
+                    Garage = GarageType!="NA" & GarageType!="CarPort",
+                    CarPort = GarageType=="CarPort",
+                    Residential = str_detect(MSZoning,"R.") | MSZoning=="FV",
+                    Sewer = if_else(Utilities=="AllPub",TRUE,FALSE) %>% as.logical()) %>% 
+  select(-`1stFlrSF`, -`2ndFlrSF`, -`3SsnPorch`,-BsmtFinSF1,-BsmtFinSF2,- Utilities)
+
+df <- df %>% mutate_at(vars(BedroomAbvGr,KitchenAbvGr,TotRmsAbvGrd,Fireplaces,GarageCars,YearBuilt,YearRemodAdd),as.integer)
+
+df <- df %>% mutate_at(vars(LandSlope,OverallQual,OverallCond,ExterQual,ExterCond,BsmtQual,BsmtCond,BsmtExposure,BsmtFinType1,BsmtFinType2,HeatingQC,KitchenQual,Functional,FireplaceQu,GarageFinish,GarageQual,GarageCond,PavedDrive,PoolQC), as.ordered)
+
+cols <- df %>% select_if(., is.ordered) %>% names()
+
+#view levels to make sure they match up properly
+view_levels <- function(cols){
+  for(col in cols){
+  lev <- df[[col]] %>% levels()
+  cat(col, ": ", lev, "\n")
+  }
+}
+
+view_levels(cols)
+
+#change levels. If they match these values, they will change. If not, they will get ignored. The majority of ordered variables match these values.
+for(col in cols){
+  df[[col]] <- fct_relevel(df[[col]],c("NA","Po","Fa","TA","Gd","Ex"))
+}
+
+df$LandSlope <- fct_rev(df$LandSlope)
+df$BsmtExposure <- fct_relevel(df$BsmtExposure,c("NA","No","Mn","Av","Gd"))
+df$BsmtFinType1 <- fct_relevel(df$BsmtFinType1,c("NA","Unf","LwQ","Rec","BLQ","ALQ","GLQ"))
+df$BsmtFinType2 <- fct_relevel(df$BsmtFinType2,c("NA","Unf","LwQ","Rec","BLQ","ALQ","GLQ"))
+df$Functional <- fct_relevel(df$Functional,c("Sal","Sev","Maj2","Maj1","Mod","Min2","Min1","Typ"))
+df$GarageFinish <- fct_relevel(df$GarageFinish,c("NA","Unf","RFn","Fin"))
+
+
+#check more factor levels
+cols <- df %>% select(Exterior1st,Exterior2nd,Condition1,Condition2,BsmtFinType1,BsmtFinType2) %>% names()
+view_levels(cols)
+
+df$Exterior1st <- factor(df$Exterior1st, levels=levels(df$Exterior2nd))
+df$Condition2 <- factor(df$Condition2,levels=levels(df$Condition1))
+```
+
+## Feature Engineering
+
+Remove the following columns:
+
+- All quality and condition columns except for 'Overall' which should cover everything.
+- GarageCars - highly correlated with GarageArea. It is pretty obvious that if more cars can fit, the area is larger.
+- TotalRmsAbvGrd, GrLivArea, and TotalBsmtSF are highly correlated with TotalSF. TotalSF seems to be a more important measure.
+- FullBath and BsmtFullBath are largely duplicate information with NumBath.
+- GarageYrBlt is highly correlated with YearBuilt and YearRemodAdd. These other features describe the necessary information.
+- MSSubClass is highly correlated with BldgType. It also appears to contain information about the year built, even though that does not show up as highly correlated.
+- YearBuilt - highly correlated with YearRemodAdd which is the same date if there was no remodel. YearBuilt is also highly correlated with many other features so this seems duplicated and somewhat irrelevant compared to remodel dates.
+
+Information changed:
+
+- Exterior2nd and BsmtFinType2 had duplicate values if there were not two different types. Changing these fields to "NA" or "None" is more accurate and reduced the correlations.
+- Condition2 also had duplicate values if there were not two different types, but this made more sense to create new variables summarizing the important qualities of Condition1 and Condition2.
+
+```{r}
+#Remove unneeded columns
+df <- df %>% select(-ExterQual,-ExterCond,-BsmtQual,-BsmtCond,-HeatingQC,-KitchenQual,-FireplaceQu,-GarageQual,-GarageCond,-PoolQC,-GarageArea,-TotRmsAbvGrd,-GrLivArea,-FullBath,-GarageYrBlt,-MSSubClass,-TotalBsmtSF,-GarageFinish,-YearBuilt,-BsmtFullBath,-HalfBath)
+
+#Remove unnecessary duplicate information
+df <- df %>% mutate_at(vars(Exterior1st,Exterior2nd,BsmtFinType1,BsmtFinType2),as.character)
+
+df <- df %>% mutate(Railroad = if_else(str_detect(Condition1, "RR"), TRUE,
+                                      if_else(str_detect(Condition2, "RR"), TRUE, FALSE)),
+                    PositiveFeature = if_else(str_detect(Condition1, "Pos"), TRUE,
+                                              if_else(str_detect(Condition2, "Pos"), TRUE, FALSE)),
+                    BusyStreet = if_else(str_detect(Condition1, "Artery|Feedr"), TRUE,
+                                          if_else(str_detect(Condition2, "Artery|Feedr"), TRUE, FALSE)),
+                    Exterior2nd = case_when(Exterior2nd == Exterior1st ~ "NA",
+                                            TRUE ~ Exterior2nd),
+                    BsmtFinType2 = case_when(BsmtFinType2 == BsmtFinType1 ~ "None",
+                                            TRUE ~ BsmtFinType2),
+                    SchoolDist = case_when(Neighborhood %in% c("Blmngtn","BrDale","NoRidge","NPkVill","NridgHt",
+                                                                "NAmes","NWAmes","Somerst","StoneBr","Veenker") ~ "Fellows",
+                                            Neighborhood %in% c("Blueste","ClearCr","Sawyer","SawyerW") ~ "Sawyer",
+                                            Neighborhood %in% c("BrkSide","Crawfor","Names","OldTown") ~ "Meeker",
+                                            Neighborhood %in% c("CollgCr","Edwards","IDOTRR","SWISU") ~ "Edwards",
+                                            Neighborhood %in% "Gilbert" ~ "Gilbert",
+                                            Neighborhood %in% c("MeadowV","Mitchel","Timber") ~ "Mitchell"),
+                    OverallQC = as.integer(OverallQual) + as.integer(OverallCond),
+                    OverallQC = as.ordered(OverallQC))
+
+df$GarageCars[df$Garage == FALSE] <- 0
+
+df <- df %>% mutate_at(vars(Exterior1st,Exterior2nd,BsmtFinType1,BsmtFinType2),as.factor) %>% 
+  select(-Garage,-Condition1,-Condition2,-OverallQual,-OverallCond)
+```
+
+## Check Correlations Again
+
+TotalSF and NumBath are highly correlated but it does not make sense to drop either one or to change them.
+
+```{r corr 2}
+corr_simple(data=df,sig=0.3)
+```
+
+# More Exploratory Data Analysis
+
+- Although BsmtHalfBath did not show up highly correlated to anything, it does not make sense to keep in the model.
+- LotFrontage, LotArea, BedroomAbvGr, TotalSF, NumBath appear to have extreme outliers.
+
+## Variable Relationships
+
+```{r relationship, warning=FALSE, out.width="50%"}
+plot_relationships <- function(x_col, y_col="SalePrice", data=df){
+  if(is.numeric(data[[x_col]])){
+      scat <- ggplot(data, mapping=aes_string(x_col, y_col))+
+        geom_jitter(alpha=0.5)+
+        geom_smooth(method="loess", se=FALSE)+
+        geom_smooth(method="lm", se=FALSE, color="red")+
+        labs(title=str_c("Sale Price vs ", x_col))
+      scat %>% print()
+      }
+  else{
+    box <- ggplot(data, aes_string(x_col, y_col))+
+      geom_boxplot()+
+      labs(title=str_c("Sale Price by ", x_col))
+    box %>% print()
+    }
+}
+
+cols <- df %>% select(-1,-SalePrice) %>% names()
+cols %>% walk(plot_relationships)
+```
+
+## Normality Check
+
+```{r normality, warning=FALSE, out.width="50%"}
+plot_normality <- function(x_col, data=df){
+  if(is.numeric(data[[x_col]])){
+      #histogram
+      h <- hist(data[[x_col]], breaks = "FD", plot = FALSE) #histogram with Freedman-Diaconis rule for binwidth
+      hist <- ggplot(data, aes_string(x_col))+
+        geom_histogram(aes(y = ..density..), breaks = h$breaks, alpha = 0.3, col = "white")+
+        geom_density(size = 1) +
+        labs(title=str_c("Histogram and density for ", x_col))
+      hist %>% print()
+      #qqplot
+      qq <- ggplot(data, aes_string(sample=x_col))+
+        stat_qq_band(fill="#ffe6e6",detrend=TRUE)+
+        stat_qq_line(color="#ff6666", size=1,detrend=TRUE)+
+        stat_qq_point(detrend=TRUE)+
+        labs(title=str_c("Quantile-quantile Normal plot of ", x_col), x="Theoretical Quantiles",y="Sample Quantiles")
+      qq %>% print()
+      #statistical tests
+      sw <- shapiro.test(data[[x_col]])
+      cat(x_col)
+      print(sw)
+  }
+}
+
+cols <- df %>% select(-1) %>% names()
+cols %>% walk(plot_normality)
+```
+
+# More Data Wrangling
+
+```{r drop}
+#Remove unnecessary column
+df <- df %>% select(-BsmtHalfBath)
+```
+
+## Transformations
+
+Transform variables to make them more normally distributed.
+
+```{r transform, warning=FALSE, out.width="50%"}
+df <- df %>% 
+   mutate(SalePrice.log = log(SalePrice),
+          LotFrontage.sqr = sqrt(LotFrontage),
+          LotArea.log = log(LotArea),
+          MasVnrArea.sqr = sqrt(MasVnrArea),
+          BsmtUnfSF.sqr = sqrt(BsmtUnfSF),
+          WoodDeckSF.sqr = sqrt(WoodDeckSF),
+          OpenPorchSF.sqr = sqrt(OpenPorchSF),
+          EnclosedPorch.sqr = sqrt(EnclosedPorch),
+          ScreenPorch.sqr = sqrt(ScreenPorch),
+          MiscVal.log = log1p(MiscVal),
+          TotalSF.log = log(TotalSF),
+          NumBath.sqr = sqrt(NumBath)) %>% select(-SalePrice,-LotFrontage,-LotArea,-MasVnrArea,-BsmtUnfSF,-OpenPorchSF,-EnclosedPorch,-ScreenPorch,-MiscVal,-TotalSF,-NumBath)
+
+cols <- df %>% select(51:62) %>% names()
+
+for(col in cols){
+ plot_normality(x_col=col)
+  }
+```
+## View Relationships Again
+
+```{r, warning=FALSE}
+cols <- df %>% select(-1,-SalePrice.log) %>% names()
+cols %>% walk(plot_relationships, y_col="SalePrice.log", data=df)
+```
+
+## Standardize Data
+
+```{r norm}
+df <- df %>% mutate_if(is.numeric, scale)
+
+df %>% head()
+```
+
+## Training & Testing Sets
+
+Recreate original testing dataframe as well as a training and validation set.
+
+```{r dummy}
+# set up new dataframe to turn factors into binary dummy variables for knn model
+# df_dummy <- df %>% mutate_if(is.ordered, as.character) 
+# df_dummy <- df_dummy %>% mutate_if(is.character, as.factor)
+# 
+# df_dummy <- df_dummy %>% select(-Id) %>% dummy_cols()
+# df_dummy <- df_dummy %>% select_if(is.numeric)
+# 
+# df_dummy %>% str()
+```
+
+```{r test train}
+#break training set into training and test sets
+test <- df %>% filter(is.na(SalePrice.log))
+
+train <- df %>% filter(!is.na(SalePrice.log))
+```
+
+## Feature Selection
+
+The Boruta package will be used to decide which features are important. This is useful to reduce noise and speed up model training.
+
+```{r boruta}
+set.seed(123)
+boruta_res <- Boruta(SalePrice.log ~. -Id, data = train, doTrace = 1)
+
+print(boruta_res)
+```
+
+The following plot shows the relative importance of each candidate explanatory attribute. 
+
+- Green indicates the attributes that are relevant to prediction.  
+- Red is for attributes that are not relevant.  
+- Yellow indicates attributes that may or may not be relevant to predicting the response variable.
+- Blue is for shadow features that are used to help with the decision to confirm or reject.
+
+```{r boruta plot}
+lz <- lapply(1:ncol(boruta_res$ImpHistory), function(i) boruta_res$ImpHistory[is.finite(boruta_res$ImpHistory[,i]),i])
+
+names(lz) <- colnames(boruta_res$ImpHistory)
+
+Labels <- sort(sapply(lz,median))
+
+plot(boruta_res, xlab = "", xaxt = "n")
+axis(side = 1,las=2,labels = names(Labels), at = 1:ncol(boruta_res$ImpHistory), cex.axis = 0.7)
+```
+
+Detailed results for each variable.
+
+```{r boruta detail}
+#options(width=125)
+
+arrange(cbind(attr=rownames(attStats(boruta_res)), attStats(boruta_res)), desc(medianImp))
+```
+
+These are the final attributes that will be used to predict house prices.
+
+```{r}
+boruta_ten <- TentativeRoughFix(boruta_res)
+print(boruta_ten)
+
+cat("\nRelevant Attributes:\n")
+final_attr <- getSelectedAttributes(boruta_ten)
+final_attr
+
+final_attr <- append(final_attr, c("SalePrice.log", "Id"))
+
+df_boruta_test <- test[final_attr]
+df_boruta_train <- train[final_attr]
+```
+
+# Models
+## Linear Regression (by AIC)
+
+```{r aic model, results=FALSE}
+mod1 <- lm(SalePrice.log ~ .-Id, data = df_boruta_train)
+
+mod1_aic <- mod1 %>% step()
+
+#variable importance sorted from highest to lowest
+varImp_sort <- function(mod){
+  imp <- as.data.frame(varImp(mod))
+  imp <- data.frame(names   = rownames(imp),
+                  overall = imp$Overall)
+  imp[order(imp$overall,decreasing = T),] %>% head(20)
+}
+
+varImp_sort(mod1_aic)
+```
+
+## Linear Regression (by p-value)
+
+```{r p model}
+#####################################
+# Automated model selection
+# Author      : Joris Meys
+# version     : 0.2
+# date        : 12/01/09
+#####################################
+#CHANGE LOG
+# 0.2   : check for empty scopevar vector
+#####################################
+
+# Function has.interaction checks whether x is part of a term in terms
+# terms is a vector with names of terms from a model
+has.interaction <- function(x,terms){
+    out <- sapply(terms,function(i){
+        sum(1-(strsplit(x,":")[[1]] %in% strsplit(i,":")[[1]]))==0
+    })
+    return(sum(out)>0)
+}
+
+# Function Model.select
+# model is the lm object of the full model
+# keep is a list of model terms to keep in the model at all times
+# sig gives the significance for removal of a variable. Can be 0.1 too (see SPSS)
+# verbose=T gives the F-tests, dropped var and resulting model after 
+model.select <- function(model,keep,sig=0.05,verbose=F){
+      counter=1
+      # check input
+      if(!is(model,"lm")) stop(paste(deparse(substitute(model)),"is not an lm object\n"))
+      # calculate scope for drop1 function
+      terms <- attr(model$terms,"term.labels")
+      if(missing(keep)){ # set scopevars to all terms
+          scopevars <- terms
+      } else{            # select the scopevars if keep is used
+          index <- match(keep,terms)
+          # check if all is specified correctly
+          if(sum(is.na(index))>0){
+              novar <- keep[is.na(index)]
+              warning(paste(
+                  c(novar,"cannot be found in the model",
+                  "\nThese terms are ignored in the model selection."),
+                  collapse=" "))
+              index <- as.vector(na.omit(index))
+          }
+          scopevars <- terms[-index]
+      }
+
+      # Backward model selection : 
+
+      while(T){
+          # extract the test statistics from drop.
+          test <- drop1(model, scope=scopevars,test="F")
+
+          if(verbose){
+              cat("-------------STEP ",counter,"-------------\n",
+              "The drop statistics : \n")
+              print(test)
+          }
+
+          pval <- test[,dim(test)[2]]
+
+          names(pval) <- rownames(test)
+          pval <- sort(pval,decreasing=T)
+
+          if(sum(is.na(pval))>0) stop(paste("Model",
+              deparse(substitute(model)),"is invalid. Check if all coefficients are estimated."))
+
+          # check if all significant
+          if(pval[1]<sig) break # stops the loop if all remaining vars are sign.
+
+          # select var to drop
+          i=1
+          while(T){
+              dropvar <- names(pval)[i]
+              check.terms <- terms[-match(dropvar,terms)]
+              x <- has.interaction(dropvar,check.terms)
+              if(x){i=i+1;next} else {break}              
+          } # end while(T) drop var
+
+          if(pval[i]<sig) break # stops the loop if var to remove is significant
+
+          if(verbose){
+             cat("\n--------\nTerm dropped in step",counter,":",dropvar,"\n--------\n\n")              
+          }
+
+          #update terms, scopevars and model
+          scopevars <- scopevars[-match(dropvar,scopevars)]
+          terms <- terms[-match(dropvar,terms)]
+
+          formul <- as.formula(paste(".~.-",dropvar))
+          model <- update(model,formul)
+
+          if(length(scopevars)==0) {
+              warning("All variables are thrown out of the model.\n",
+              "No model could be specified.")
+              return()
+          }
+          counter=counter+1
+      } # end while(T) main loop
+      return(model)
+}
+
+mod1_p <- model.select(mod1)
+mod1_p %>% summary()
+#mod1_p <- update(mod1_p,.~.-Sewer)
+
+#view variable importance
+varImp_sort(mod1_p)
+
+compare_performance(mod1_aic,mod1_p,metrics=c("AIC","R2","RMSE"))
+```
+
+## Ensemble
+
+All models ended up being pretty accurate with gradient boosting being the best and linear regression the worst.
+
+```{r}
+mod1 <- lm(SalePrice.log ~ .-Id-SchoolDist-Residential-Bsmt-BsmtFinType1, data=df_boruta_train)
+summary(mod1)
+anova(mod1, test="Chisq")
+
+control <- trainControl(method="repeatedcv", number=10, repeats=2, savePredictions = "final", allowParallel = TRUE)
+algorithm_list <- c("lm","knn","rf","gbm")
+
+##start here. view results between using repeated cv and not
+
+set.seed(123)
+cl <- makePSOCKcluster(5)
+registerDoParallel(cl)
+mod <- caretList(SalePrice.log ~ .-Id-SchoolDist-Residential-Bsmt-BsmtFinType1, 
+                 data=df_boruta_train, methodList=algorithm_list, trControl=control)
+stopCluster(cl)
+
+results <- resamples(mod)
+summary(results)
+
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+bwplot(results, scales=scales)
+```
+
+
+# Apply Model
+
+Finally, predict results with test data frame.
+
+```{r, warning=FALSE}
+df_final <- test %>% mutate(score = predict(mod1_aic, newdata=test),
+                            score = score * attr(df$SalePrice.log, 'scaled:scale') + attr(df$SalePrice.log, 'scaled:center'),
+                            SalePrice = exp(score)) %>% select(Id,SalePrice)
+
+
+#write_csv(df_final, "house_price_predictions.csv")
+```
